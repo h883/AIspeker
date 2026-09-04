@@ -1,4 +1,4 @@
-# Student AI Assistant をコマンド一つで起動する（Windows）。
+﻿# Student AI Assistant をコマンド一つで起動する（Windows）。
 #
 #   .\run.ps1
 #
