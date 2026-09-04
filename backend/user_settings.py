@@ -28,6 +28,12 @@ DEFAULTS: dict[str, Any] = {
     "tts_rate": 1.0,
     "save_audio": False,
     "save_history": True,
+    # --- ウェイクワード（仕様書 20章）---
+    "wake_word_enabled": False,          # 常時待受にするか
+    "wake_word": "ねえAI",                # 呼びかけの言葉
+    "wake_ack": "はい",                   # 反応したときに返す短い返事（空なら音だけ）
+    "wake_chime": True,                  # 反応したときに鳴らす音
+    "wake_timeout_seconds": 8,           # 呼びかけ後、これだけ黙っていたら待受へ戻る
 }
 
 

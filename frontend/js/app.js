@@ -42,6 +42,7 @@
   /* AI 状態表示（仕様書 15章） */
   const ORB_STATES = {
     idle:      { cls: "",            label: "何か話してね" },
+    standby:   { cls: "is-standby",   label: "" },   // ラベルは呼びかけの言葉に差し替える
     listening: { cls: "is-listening", label: "聞いています…" },
     thinking:  { cls: "is-thinking",  label: "考えています…" },
     fetching:  { cls: "is-fetching",  label: "情報を確認しています…" },
@@ -53,7 +54,17 @@
     const orb = $("#orb");
     const info = ORB_STATES[stateName] || ORB_STATES.idle;
     orb.className = "orb " + info.cls;
-    $("#orb-label").textContent = info.label;
+    if (stateName === "standby") {
+      const phrase = (state.settings.wake_word || "ねえAI").split("/")[0];
+      $("#orb-label").textContent = "「" + phrase + "」と呼んでね";
+    } else {
+      $("#orb-label").textContent = info.label;
+    }
+  }
+
+  /** 一連のやり取りが終わったときの落ち着き先。待受中なら待受へ戻る。 */
+  function settle() {
+    setOrb(WakeWord.running ? "standby" : "idle");
   }
 
   function showAnswer(text, meta) {
@@ -63,6 +74,18 @@
   }
 
   /* ================= 会話 ================= */
+
+  /** 読み上げが終わるまで待つ。読み上げOFFなら即座に解決する。 */
+  function speakAndWait(text) {
+    return new Promise(resolve => {
+      if (state.settings.tts_enabled === false || !text) { resolve(); return; }
+      let done = false;
+      const finish = () => { if (!done) { done = true; resolve(); } };
+      Speech.speak(text, { rate: state.settings.tts_rate || 1.0, onend: finish });
+      // onend が来ない端末があるので、長さから見積もった時間で必ず解決させる
+      setTimeout(finish, 1500 + text.length * 130);
+    });
+  }
 
   async function ask(message, options) {
     options = options || {};
@@ -84,7 +107,8 @@
       setOrb("error");
       const text = err.message;
       if (options.fromChat) appendBubble("err", text); else showAnswer(text, "");
-      setTimeout(() => setOrb("idle"), 2600);
+      await speakAndWait(text);
+      setTimeout(settle, 1200);
       return;
     }
     clearTimeout(fetchingTimer);
@@ -92,7 +116,8 @@
     if (!data.ok) {
       setOrb("error");
       if (options.fromChat) appendBubble("err", data.text); else showAnswer(data.text, "");
-      setTimeout(() => setOrb("idle"), 2600);
+      await speakAndWait(data.text);
+      setTimeout(settle, 1200);
       return;
     }
 
@@ -102,30 +127,107 @@
     const meta = data.tools && data.tools.length ? "使用: " + data.tools.join(", ") : "";
     if (options.fromChat) appendBubble("ai", data.text); else showAnswer(data.text, meta);
 
-    if (state.settings.tts_enabled !== false) {
-      setOrb("speaking");
-      Speech.speak(data.text, {
-        rate: state.settings.tts_rate || 1.0,
-        onend: () => setOrb("idle")
-      });
-      setTimeout(() => { if (!window.speechSynthesis.speaking) setOrb("idle"); }, 800);
-    } else {
-      setOrb("idle");
-    }
+    setOrb("speaking");
+    await speakAndWait(data.text);
+    settle();
   }
 
-  function startListening(onText) {
+  function startListening(onText, options) {
+    options = options || {};
     Speech.cancelSpeech();
     Speech.listen({
       onstart: () => { setOrb("listening"); $("#orb-transcript").textContent = ""; },
       oninterim: (text) => { $("#orb-transcript").textContent = text; },
-      onerror: (message) => { setOrb("error"); showToast(message); setTimeout(() => setOrb("idle"), 2000); },
+      onerror: (message) => {
+        if (options.quiet) return;          // 待受中の「聞き取れませんでした」は出さない
+        setOrb("error");
+        showToast(message);
+        setTimeout(settle, 2000);
+      },
       onend: (text) => {
         $("#orb-transcript").textContent = text;
         if (text) onText(text);
-        else setOrb("idle");
+        else if (options.onSilence) options.onSilence();
+        else settle();
       }
     });
+  }
+
+  /* ================= ウェイクワード常時待受（仕様書 20章） ================= */
+
+  function updateWakeToggle() {
+    const button = $("#wake-toggle");
+    const on = WakeWord.running;
+    button.setAttribute("aria-pressed", on ? "true" : "false");
+    $("#wake-toggle-text").textContent = on ? "常時待受 オン" : "常時待受 オフ";
+  }
+
+  /** 呼びかけを検知してから、質問を聞いて答えるまでの一連の流れ。 */
+  async function runWakeCycle(spokenRest) {
+    if (state.settings.wake_chime !== false) WakeWord.chime();
+
+    // 「ねえAI、明日の天気は？」のように続けて言われたら、そのまま処理する
+    if (spokenRest && spokenRest.length >= 2) {
+      $("#orb-transcript").textContent = spokenRest;
+      switchView("home");
+      await ask(spokenRest, { fromChat: false });
+      WakeWord.resume();
+      settle();
+      return;
+    }
+
+    switchView("home");
+    const ack = (state.settings.wake_ack || "").trim();
+    if (ack) await speakAndWait(ack);
+
+    let handled = false;
+    const backToStandby = () => {
+      if (handled) return;
+      handled = true;
+      WakeWord.resume();
+      settle();
+    };
+
+    // 呼びかけたまま黙っている場合は待受へ戻す
+    const timeout = setTimeout(backToStandby, (state.settings.wake_timeout_seconds || 8) * 1000);
+
+    startListening(async (text) => {
+      clearTimeout(timeout);
+      if (handled) return;
+      handled = true;
+      await ask(text, { fromChat: false });
+      WakeWord.resume();
+      settle();
+    }, {
+      quiet: true,
+      onSilence: () => { clearTimeout(timeout); backToStandby(); }
+    });
+  }
+
+  function startWakeWord(options) {
+    options = options || {};
+    const started = WakeWord.start({
+      phrase: state.settings.wake_word || "ねえAI",
+      onDetect: runWakeCycle,
+      onError: (message) => {
+        showToast(message, 5000);
+        updateWakeToggle();
+        settle();
+      }
+    });
+    updateWakeToggle();
+    if (started) {
+      if (options.announce) showToast("常時待受をオンにしました", 2200);
+      settle();
+    }
+    return started;
+  }
+
+  function stopWakeWord(options) {
+    WakeWord.stop();
+    updateWakeToggle();
+    settle();
+    if (options && options.announce) showToast("常時待受をオフにしました", 2000);
   }
 
   function appendBubble(kind, text) {
@@ -400,7 +502,10 @@
       ["天気 API", status.weather, "Open-Meteo"],
       ["Google カレンダー", status.google_calendar, status.google_calendar ? "接続済み" : "未接続"],
       ["音声入力", Speech.supported, Speech.supported ? "Web Speech API" : "非対応ブラウザ"],
-      ["読み上げ", Speech.ttsSupported, Speech.ttsSupported ? "SpeechSynthesis" : "非対応ブラウザ"]
+      ["読み上げ", Speech.ttsSupported, Speech.ttsSupported ? "SpeechSynthesis" : "非対応ブラウザ"],
+      ["常時待受", WakeWord.running,
+        WakeWord.running ? "「" + (state.settings.wake_word || "").split("/")[0] + "」で反応"
+                         : (window.isSecureContext ? "オフ" : "HTTPSが必要")]
     ];
     $("#status-panel").innerHTML = rows.map(row =>
       '<div class="status-row"><span class="' + (row[1] ? "badge-ok" : "badge-off") + '">' +
@@ -428,6 +533,12 @@
       state.settings = data.settings;
       $("#settings-saved").hidden = false;
       setTimeout(() => { $("#settings-saved").hidden = true; }, 2000);
+
+      // 呼びかけの言葉や有効・無効の変更を、その場で待受へ反映する
+      WakeWord.stop();
+      if (state.settings.wake_word_enabled) startWakeWord();
+      updateWakeToggle();
+
       loadHome();
     } catch (err) {
       showToast(err.message);
@@ -444,11 +555,28 @@
       card.onclick = () => switchView(card.dataset.goto);
     });
 
+    // 最初のタップで音を鳴らせる状態にしておく
+    document.addEventListener("click", () => WakeWord.primeAudio(), { once: true });
+
     $("#orb").onclick = () => {
       // 音声が使えない環境ではテキスト入力にフォールバックする
       if (!window.isSecureContext || !Speech.supported) { switchView("chat"); return; }
       if (Speech.listening) { Speech.stop(); return; }
+      // 待受中は呼びかけと同じ流れに乗せる（マイクの奪い合いを避ける）
+      if (WakeWord.running) { WakeWord.pause(); runWakeCycle(""); return; }
       startListening(text => ask(text, { fromChat: false }));
+    };
+
+    $("#wake-toggle").onclick = () => {
+      WakeWord.primeAudio();
+      if (WakeWord.running) {
+        stopWakeWord({ announce: true });
+        API.saveSettings({ wake_word_enabled: false }).catch(() => {});
+        state.settings.wake_word_enabled = false;
+      } else if (startWakeWord({ announce: true })) {
+        API.saveSettings({ wake_word_enabled: true }).catch(() => {});
+        state.settings.wake_word_enabled = true;
+      }
     };
 
     $("#chat-mic").onclick = () => startListening(text => {
@@ -529,9 +657,15 @@
     // マイクは https か localhost でしか使えない。理由を先に伝えておく。
     if (!window.isSecureContext) {
       $("#orb-label").textContent = "タップして文字で質問";
-      showToast("HTTPSで開くと音声入力が使えます（README参照）", 5000);
+      $("#wake-toggle").hidden = true;
+      showToast("HTTPSで開くと音声入力と常時待受が使えます（README参照）", 5000);
     } else if (!Speech.supported) {
+      $("#wake-toggle").hidden = true;
       showToast("このブラウザは音声入力に非対応です。Chromeをお試しください。", 5000);
+    } else if (state.settings.wake_word_enabled) {
+      startWakeWord();
+    } else {
+      updateWakeToggle();
     }
 
     loadHome();

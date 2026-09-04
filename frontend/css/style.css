@@ -90,6 +90,40 @@ html, body {
 .orb-label { margin: 16px 0 4px; color: var(--muted); font-size: 15px; }
 .orb-transcript { margin: 0; min-height: 20px; font-size: 14px; color: var(--accent); }
 
+/* 待受中はオーブがゆっくり呼吸する */
+.orb.is-standby { animation: breathe 3.4s ease-in-out infinite; }
+@keyframes breathe {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(79, 214, 160, .28), 0 16px 40px rgba(0,0,0,.45); }
+  50%      { box-shadow: 0 0 0 16px rgba(79, 214, 160, 0), 0 16px 40px rgba(0,0,0,.45); }
+}
+
+.wake-toggle {
+  margin-top: 14px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  padding: 7px 14px;
+  font-size: 12px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.wake-toggle[aria-pressed="true"] { color: var(--ok); border-color: rgba(79, 214, 160, .45); }
+
+.wake-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.wake-toggle[aria-pressed="true"] .wake-dot {
+  background: var(--ok);
+  animation: blink 2s ease-in-out infinite;
+}
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+
+.note { font-size: 12px; color: var(--muted); line-height: 1.7; margin: 2px 0 6px; }
+
 .answer {
   background: var(--card);
   border: 1px solid var(--line);

@@ -29,6 +29,9 @@
       </button>
       <p id="orb-label" class="orb-label">何か話してね</p>
       <p id="orb-transcript" class="orb-transcript"></p>
+      <button id="wake-toggle" class="wake-toggle" type="button" aria-pressed="false">
+        <span class="wake-dot"></span><span id="wake-toggle-text">常時待受 オフ</span>
+      </button>
     </div>
 
     <div id="answer" class="answer" hidden>
@@ -165,6 +168,27 @@
         <option value="google">Google カレンダー</option>
       </select>
 
+      <h2>ウェイクワード</h2>
+      <label class="switch"><input id="set-wake_word_enabled" name="wake_word_enabled" type="checkbox"> 呼びかけで反応する（常時待受）</label>
+
+      <label class="field-label" for="set-wake_word">呼びかけの言葉（スラッシュ区切りで複数登録できます）</label>
+      <input id="set-wake_word" name="wake_word" type="text" placeholder="ねえAI/ヘイAI">
+
+      <label class="field-label" for="set-wake_ack">反応したときの返事（空にすると音だけ）</label>
+      <input id="set-wake_ack" name="wake_ack" type="text" placeholder="はい">
+
+      <label class="field-label" for="set-wake_timeout_seconds">呼びかけ後の待ち時間（秒）</label>
+      <input id="set-wake_timeout_seconds" name="wake_timeout_seconds" type="number" min="3" max="30">
+
+      <label class="switch"><input id="set-wake_chime" name="wake_chime" type="checkbox"> 反応したときに音を鳴らす</label>
+      <p class="note">
+        常時待受にはHTTPS接続とマイクの許可、そして画面を開いたままにしておくことが必要です。<br>
+        呼びかけの判定はこの端末のブラウザ内で行い、Raspberry PiやGeminiへは呼びかけを検知するまで何も送りません。
+        ただしブラウザの音声認識自体はGoogleの音声サービスを使うため、待受中の音声はGoogleへ送られます。
+        これを避けたい場合は、Raspberry PiにUSBマイクを付けてopenWakeWordを動かす構成が必要です（README参照）。
+      </p>
+
+      <h2>その他</h2>
       <label class="switch"><input id="set-tts_enabled" name="tts_enabled" type="checkbox"> 回答を読み上げる</label>
       <label class="switch"><input id="set-save_history" name="save_history" type="checkbox"> 会話履歴を保存する</label>
       <label class="switch"><input id="set-save_audio" name="save_audio" type="checkbox"> 音声ファイルを保存する</label>
@@ -190,6 +214,7 @@
 
 <script src="/js/api.js"></script>
 <script src="/js/speech.js"></script>
+<script src="/js/wakeword.js"></script>
 <script src="/js/app.js"></script>
 </body>
 </html>

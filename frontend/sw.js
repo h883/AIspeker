@@ -2,13 +2,14 @@
    画面の骨組みだけをキャッシュし、API 応答はキャッシュしない。
    古い天気や予定を表示してしまわないようにするため（仕様書 22章）。 */
 
-const CACHE = "student-ai-v1";
+const CACHE = "student-ai-v2";
 const SHELL = [
   "/",
   "/index.html",
   "/css/style.css",
   "/js/api.js",
   "/js/speech.js",
+  "/js/wakeword.js",
   "/js/app.js",
   "/assets/icon.svg",
   "/assets/icon-192.png",
