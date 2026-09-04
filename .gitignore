@@ -1,0 +1,30 @@
+# --- 秘密情報（絶対に push しない・仕様書 21章）---
+.env
+config/google_client_secret.json
+config/google_token.json
+config/settings.json
+config/cert.pem
+config/key.pem
+
+# --- ユーザーデータ ---
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/audio/
+
+# --- Python ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- OS / エディタ ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

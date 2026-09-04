@@ -1,0 +1,11 @@
+# 任意機能。必要になったときだけ入れる。
+#   pip install -r requirements-optional.txt
+
+# サーバー側で音声認識を完結させる（ブラウザの音声認識が使えない場合）
+faster-whisper>=1.0
+
+# サーバー側で音声合成する（TTS_PROVIDER=gtts のとき）
+gTTS>=2.5
+
+# ウェイクワード検出（仕様書 20章 / Version 1.1）
+# openwakeword>=0.6

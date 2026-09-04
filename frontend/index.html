@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="theme-color" content="#0b1020">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Student AI Assistant</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/assets/icon-192.png">
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ================= ホーム ================= -->
+  <section class="view is-active" id="view-home">
+    <header class="statusbar">
+      <span id="clock">--:--</span>
+      <span id="today">--月--日</span>
+    </header>
+
+    <div class="orb-area">
+      <button id="orb" class="orb" type="button" aria-label="話しかける">
+        <span class="orb-core"></span>
+      </button>
+      <p id="orb-label" class="orb-label">何か話してね</p>
+      <p id="orb-transcript" class="orb-transcript"></p>
+    </div>
+
+    <div id="answer" class="answer" hidden>
+      <p id="answer-text"></p>
+      <div id="answer-meta" class="answer-meta"></div>
+    </div>
+
+    <div class="cards">
+      <article class="card" data-goto="weather">
+        <h2>今日の天気</h2>
+        <p class="card-main" id="home-weather">読み込み中…</p>
+        <p class="card-sub" id="home-weather-sub"></p>
+      </article>
+      <article class="card" data-goto="calendar">
+        <h2>次の予定</h2>
+        <p class="card-main" id="home-event">読み込み中…</p>
+        <p class="card-sub" id="home-event-sub"></p>
+      </article>
+      <article class="card" data-goto="route">
+        <h2 id="home-route-title">学校まで</h2>
+        <p class="card-main" id="home-route">読み込み中…</p>
+        <p class="card-sub" id="home-route-sub"></p>
+      </article>
+    </div>
+  </section>
+
+  <!-- ================= 会話 ================= -->
+  <section class="view" id="view-chat">
+    <header class="view-head"><h1>AIと話す</h1></header>
+    <div id="chat-log" class="chat-log"></div>
+    <form id="chat-form" class="chat-form">
+      <input id="chat-input" type="text" placeholder="メッセージを入力" autocomplete="off">
+      <button id="chat-mic" type="button" aria-label="音声入力">🎙</button>
+      <button type="submit" aria-label="送信">送信</button>
+    </form>
+  </section>
+
+  <!-- ================= 予定 ================= -->
+  <section class="view" id="view-calendar">
+    <header class="view-head"><h1>予定</h1></header>
+    <div id="calendar-list" class="list"></div>
+    <form id="event-form" class="stack-form">
+      <h2>予定を追加</h2>
+      <input id="event-title" type="text" placeholder="予定名" required>
+      <input id="event-start" type="datetime-local" required>
+      <input id="event-location" type="text" placeholder="場所（任意）">
+      <button type="submit">追加</button>
+    </form>
+  </section>
+
+  <!-- ================= 経路 ================= -->
+  <section class="view" id="view-route">
+    <header class="view-head"><h1>経路</h1></header>
+    <form id="route-form" class="stack-form">
+      <input id="route-origin" type="text" placeholder="出発地（空欄で自宅）">
+      <input id="route-destination" type="text" placeholder="目的地（空欄で学校）">
+      <label class="field-label" for="route-arrival">到着したい時刻（任意）</label>
+      <input id="route-arrival" type="datetime-local">
+      <button type="submit">検索</button>
+    </form>
+    <div id="route-result" class="list"></div>
+  </section>
+
+  <!-- ================= 天気 ================= -->
+  <section class="view" id="view-weather">
+    <header class="view-head"><h1>天気</h1></header>
+    <div id="weather-detail" class="list"></div>
+  </section>
+
+  <!-- ================= リマインダー ================= -->
+  <section class="view" id="view-reminders">
+    <header class="view-head"><h1>リマインダー</h1></header>
+    <div id="reminder-list" class="list"></div>
+    <form id="reminder-form" class="stack-form">
+      <h2>追加</h2>
+      <input id="reminder-title" type="text" placeholder="内容" required>
+      <input id="reminder-when" type="text" placeholder="20分後 / 明日 7:30 / 2026-09-05T07:30" required>
+      <button type="submit">登録</button>
+    </form>
+  </section>
+
+  <!-- ================= 履歴 ================= -->
+  <section class="view" id="view-history">
+    <header class="view-head">
+      <h1>履歴</h1>
+      <button id="history-clear" class="ghost" type="button">全削除</button>
+    </header>
+    <div id="history-list" class="list"></div>
+  </section>
+
+  <!-- ================= 設定 ================= -->
+  <section class="view" id="view-settings">
+    <header class="view-head"><h1>設定</h1></header>
+    <div id="status-panel" class="status-panel"></div>
+    <form id="settings-form" class="stack-form">
+      <label class="field-label" for="set-user_name">ユーザー名</label>
+      <input id="set-user_name" name="user_name" type="text">
+
+      <label class="field-label" for="set-school_name">学校名</label>
+      <input id="set-school_name" name="school_name" type="text">
+
+      <label class="field-label" for="set-school_address">学校の所在地</label>
+      <input id="set-school_address" name="school_address" type="text" placeholder="大阪市西区西本町1-1-1">
+
+      <label class="field-label" for="set-school_start_time">通常の授業開始時刻</label>
+      <input id="set-school_start_time" name="school_start_time" type="time">
+
+      <label class="field-label" for="set-home_address">自宅住所（この端末とRaspberry Pi内にのみ保存）</label>
+      <input id="set-home_address" name="home_address" type="text">
+
+      <label class="field-label" for="set-home_station">自宅最寄駅</label>
+      <input id="set-home_station" name="home_station" type="text">
+
+      <label class="field-label" for="set-travel_mode">通常の移動手段</label>
+      <select id="set-travel_mode" name="travel_mode">
+        <option value="transit">電車・バス</option>
+        <option value="walking">徒歩</option>
+        <option value="bicycling">自転車</option>
+        <option value="driving">車</option>
+      </select>
+
+      <label class="field-label" for="set-buffer_minutes">余裕時間（分）</label>
+      <input id="set-buffer_minutes" name="buffer_minutes" type="number" min="0" max="120">
+
+      <label class="field-label" for="set-rain_extra_minutes">雨のときの追加余裕（分）</label>
+      <input id="set-rain_extra_minutes" name="rain_extra_minutes" type="number" min="0" max="120">
+
+      <label class="field-label" for="set-weather_location">天気の地域</label>
+      <input id="set-weather_location" name="weather_location" type="text">
+
+      <label class="field-label" for="set-calendar_source">予定の取得元</label>
+      <select id="set-calendar_source" name="calendar_source">
+        <option value="local">この端末に登録した予定</option>
+        <option value="google">Google カレンダー</option>
+      </select>
+
+      <label class="switch"><input id="set-tts_enabled" name="tts_enabled" type="checkbox"> 回答を読み上げる</label>
+      <label class="switch"><input id="set-save_history" name="save_history" type="checkbox"> 会話履歴を保存する</label>
+      <label class="switch"><input id="set-save_audio" name="save_audio" type="checkbox"> 音声ファイルを保存する</label>
+
+      <button type="submit">保存</button>
+      <p id="settings-saved" class="saved-note" hidden>保存しました</p>
+    </form>
+  </section>
+
+  <!-- ================= タブ ================= -->
+  <nav class="tabbar">
+    <button data-view="home" class="is-active">ホーム</button>
+    <button data-view="chat">AI</button>
+    <button data-view="calendar">予定</button>
+    <button data-view="route">経路</button>
+    <button data-view="reminders">通知</button>
+    <button data-view="history">履歴</button>
+    <button data-view="settings">設定</button>
+  </nav>
+
+  <div id="toast" class="toast" hidden></div>
+</div>
+
+<script src="/js/api.js"></script>
+<script src="/js/speech.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>

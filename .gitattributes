@@ -1,0 +1,9 @@
+# 後に書いたルールが優先されるため、全体設定を先に置く。
+* text=auto
+
+# シェルスクリプトは必ず LF で保存する。
+# CRLF が混ざると Raspberry Pi で「bad interpreter」エラーになるため。
+*.sh text eol=lf
+*.py text eol=lf
+*.ps1 text eol=crlf
+*.png binary
