@@ -33,6 +33,39 @@ def _error_message(response: httpx.Response) -> str:
         return response.text[:200] or str(response.status_code)
 
 
+def explain_error(status: int, message: str) -> str:
+    """Gemini のエラーを、次に何をすればよいか分かる日本語にする。
+
+    同じ 403 でも「キーが違う」のか「プロジェクトが許可されていない」のかで
+    対処がまったく変わるため、原因ごとに案内を変える。
+    """
+    lowered = message.lower()
+
+    if "denied access" in lowered or "project has been denied" in lowered:
+        return (
+            "APIキー自体は有効ですが、そのキーのGoogleプロジェクトがGemini APIの利用を"
+            "許可されていません。学校や会社のGoogleアカウントで作ったキーだと、"
+            "管理者がGenerative AIを制限していることがあります。"
+            "個人のGoogleアカウントでAI Studioから新しいキーを作り直してみてください。"
+        )
+    if "has not been used in project" in lowered or "service_disabled" in lowered:
+        return (
+            "そのプロジェクトでGenerative Language APIが有効になっていません。"
+            "Google Cloudコンソールで有効化するか、AI Studioでキーを作り直してください。"
+        )
+    if "user location" in lowered or "location is not supported" in lowered:
+        return "現在の地域からはGemini APIを利用できません。"
+    if "expired" in lowered:
+        return "APIキーの有効期限が切れています。新しいキーを作り直してください。"
+    if "api key not valid" in lowered or "invalid api key" in lowered or "api_key_invalid" in lowered:
+        return "APIキーが正しくありません。余分な空白が入っていないか確認してください。"
+    if status == 429 or "quota" in lowered or "rate limit" in lowered:
+        return "利用制限に達しています。しばらく待ってから試してください。"
+    if status in (401, 403):
+        return f"Gemini の利用を許可されませんでした（{message}）。"
+    return f"Gemini がエラーを返しました（{message}）。"
+
+
 # 会話に使えないモデル（埋め込み・画像生成・音声など）を名前で除く
 _NON_CHAT_HINTS = ("embedding", "embed", "aqa", "imagen", "veo", "-tts", "image-generation")
 
@@ -101,12 +134,8 @@ def list_models(api_key: str = "") -> dict[str, Any]:
                 timeout=20,
             )
             if response.status_code != 200:
-                message = _error_message(response)
-                if response.status_code in (400, 401, 403):
-                    return {"ok": False, "error": f"APIキーが正しくないようです（{message}）。"}
-                if response.status_code == 429:
-                    return {"ok": False, "error": "利用制限に達しています。しばらく待ってから試してください。"}
-                return {"ok": False, "error": f"Gemini がエラーを返しました（{message}）。"}
+                return {"ok": False,
+                        "error": explain_error(response.status_code, _error_message(response))}
 
             payload = response.json()
             for item in payload.get("models") or []:
@@ -155,13 +184,20 @@ def _probe_model(key: str, model: str) -> dict[str, Any]:
         return {"ok": True}
 
     message = _error_message(response)
-    if response.status_code == 429:
-        return {"ok": False, "fatal": True,
-                "error": "利用制限に達しています。しばらく待ってから試してください。"}
-    if response.status_code in (401, 403) and "model" not in message.lower():
-        return {"ok": False, "fatal": True, "error": f"APIキーが正しくないようです（{message}）。"}
-    # モデル固有の問題（提供終了・権限なしなど）は、次の候補を試す価値がある
-    return {"ok": False, "fatal": False, "error": message}
+    lowered = message.lower()
+
+    # モデルを変えれば直る見込みがあるのは、そのモデル固有の問題だけ
+    model_specific = (
+        "model" in lowered
+        and ("not found" in lowered or "no longer available" in lowered
+             or "not supported" in lowered or "does not exist" in lowered)
+    )
+    if response.status_code == 404 or model_specific:
+        return {"ok": False, "fatal": False, "error": message}
+
+    # キーやプロジェクトの問題は、どのモデルを選んでも同じ結果になる
+    return {"ok": False, "fatal": True,
+            "error": explain_error(response.status_code, message)}
 
 
 def verify_key(api_key: str = "", model: str = "") -> dict[str, Any]:
@@ -231,16 +267,9 @@ def _request(payload: dict[str, Any]) -> dict[str, Any]:
         raise GeminiError("現在AIサービスに接続できません。") from exc
 
     if response.status_code >= 400:
-        try:
-            message = response.json().get("error", {}).get("message", "")
-        except ValueError:
-            message = response.text[:300]
+        message = _error_message(response)
         logger.error("gemini error %s: %s", response.status_code, message)
-        if response.status_code in (401, 403):
-            raise GeminiError("Gemini APIキーが正しくないため応答できません。")
-        if response.status_code == 429:
-            raise GeminiError("AIサービスの利用制限に達しました。しばらく待ってからお試しください。")
-        raise GeminiError(f"AIサービスがエラーを返しました（{message or response.status_code}）。")
+        raise GeminiError(explain_error(response.status_code, message))
 
     try:
         return response.json()

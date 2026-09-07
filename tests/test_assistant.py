@@ -202,6 +202,35 @@ class ModelListingTest(unittest.TestCase):
         self.assertEqual(result["requested"], "gemini-2.5-flash")
         self.assertEqual(result["model"], "gemini-3.6-flash")
 
+    def test_denied_project_is_not_blamed_on_the_key(self) -> None:
+        """キーは有効でもプロジェクトが拒否されることがある。案内を取り違えない。"""
+        denied = mock.Mock()
+        denied.status_code = 403
+        denied.json.return_value = {"error": {"message":
+            "Your project has been denied access. Please contact support."}}
+
+        with mock.patch.object(gemini.httpx, "get", return_value=self._ok(self.LISTING)), \
+             mock.patch.object(gemini.httpx, "post", return_value=denied) as post:
+            result = gemini.verify_key("valid-key", "gemini-3.6-flash")
+
+        self.assertFalse(result["ok"])
+        self.assertIn("APIキー自体は有効", result["error"])
+        self.assertIn("プロジェクト", result["error"])
+        # モデルを変えても直らないので、総当たりしない
+        self.assertEqual(post.call_count, 1)
+
+    def test_error_messages_are_actionable(self) -> None:
+        cases = [
+            (403, "Your project has been denied access.", "プロジェクト"),
+            (403, "API key not valid. Please pass a valid API key.", "APIキーが正しくありません"),
+            (403, "Generative Language API has not been used in project 123 before", "有効になっていません"),
+            (400, "User location is not supported for the API use.", "地域"),
+            (429, "Quota exceeded", "利用制限"),
+        ]
+        for status, raw, expected in cases:
+            with self.subTest(raw=raw):
+                self.assertIn(expected, gemini.explain_error(status, raw))
+
     def test_bad_key_is_reported_before_choosing_a_model(self) -> None:
         denied = mock.Mock()
         denied.status_code = 403
