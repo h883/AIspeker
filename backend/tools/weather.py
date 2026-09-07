@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import httpx
@@ -30,11 +31,11 @@ WMO_JA = {
 }
 
 
-def _geocode(location: str) -> tuple[float, float] | None:
+def _geocode_once(name: str) -> tuple[float, float] | None:
     try:
         response = httpx.get(
             GEOCODE_URL,
-            params={"name": location, "count": 1, "language": "ja", "format": "json"},
+            params={"name": name, "count": 1, "language": "ja", "format": "json"},
             timeout=10,
         )
         response.raise_for_status()
@@ -46,6 +47,54 @@ def _geocode(location: str) -> tuple[float, float] | None:
     return float(results[0]["latitude"]), float(results[0]["longitude"])
 
 
+def geocode_candidates(location: str) -> list[str]:
+    """地名の言い換え候補を、細かい順に並べて返す。
+
+    Open-Meteo の地名検索は「大阪市」は引けるが「大阪市天王寺区」「新宿区」
+    「大阪」は引けない。市区町村の書き方の揺れを吸収するために候補を作る。
+    """
+    text = (location or "").strip()
+    if not text:
+        return []
+
+    candidates = [text]
+
+    def add(value: str) -> None:
+        if value and value not in candidates:
+            candidates.append(value)
+
+    # 「東京都新宿区」→「新宿区」（都道府県の接頭辞を落とす）
+    prefecture = re.match(r"^.{2,3}[都道府県](.+)$", text)
+    if prefecture:
+        add(prefecture.group(1))
+
+    # 「大阪市天王寺区」→「大阪市」（市までで切る）
+    for base in list(candidates):
+        city = re.match(r"^(.+?市)", base)
+        if city:
+            add(city.group(1))
+
+    # 「新宿区」→「新宿」（末尾の区町村を落とす）
+    for base in list(candidates):
+        if base.endswith(("区", "町", "村")):
+            add(base[:-1])
+
+    # 「大阪」→「大阪市」（市を補う）
+    for base in list(candidates):
+        if not base.endswith(("市", "区", "町", "村", "都", "道", "府", "県")):
+            add(base + "市")
+
+    return candidates
+
+
+def geocode(location: str) -> tuple[float, float] | None:
+    for candidate in geocode_candidates(location):
+        coords = _geocode_once(candidate)
+        if coords:
+            return coords
+    return None
+
+
 def get_weather(location: str | None = None, date: str | None = None) -> dict[str, Any]:
     settings = user_settings.load()
     target_date = resolve_date(date)
@@ -53,11 +102,11 @@ def get_weather(location: str | None = None, date: str | None = None) -> dict[st
 
     coords: tuple[float, float] | None = None
     if place and place != settings.get("weather_location"):
-        coords = _geocode(place)
+        coords = geocode(place)
     if coords is None:
         lat, lon = settings.get("weather_lat"), settings.get("weather_lon")
         if lat is None or lon is None:
-            coords = _geocode(place) if place else None
+            coords = geocode(place) if place else None
         else:
             coords = (float(lat), float(lon))
     if coords is None:

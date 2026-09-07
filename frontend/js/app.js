@@ -531,6 +531,7 @@
     try {
       const data = await API.saveSettings(values);
       state.settings = data.settings;
+      if (data.warning) showToast(data.warning, 5000);
       $("#settings-saved").hidden = false;
       setTimeout(() => { $("#settings-saved").hidden = true; }, 2000);
 
@@ -544,6 +545,203 @@
       showToast(err.message);
     }
   }
+
+  /* ================= 初回セットアップ ================= */
+
+  const setup = {
+    step: 1,
+    keys: { gemini_api_key: "", gemini_model: "", google_maps_api_key: "" },
+
+    open: async function (step) {
+      document.body.classList.add("is-setup");
+      $$(".view").forEach(el => el.classList.remove("is-active"));
+      $("#view-setup").classList.add("is-active");
+      this.fillFromSettings();
+      this.go(step || 1);
+
+      // 現在の登録状況を反映する（やり直しのとき用）
+      try {
+        const data = await API.setupState();
+        state.settings = data.settings;
+        $("#setup-gemini-model").value = data.gemini_model || "gemini-2.5-flash";
+        $("#setup-gemini-key").placeholder = data.gemini_configured
+          ? "登録済み（変更するときだけ入力）" : "AIza... から始まる文字列";
+        $("#setup-maps-key").placeholder = data.maps_configured
+          ? "登録済み（変更するときだけ入力）" : "未設定のままでもOK";
+        $("#setup-calendar-state").textContent = data.google_calendar_connected
+          ? "現在: 連携済み" : "現在: 未連携";
+        this.fillFromSettings();
+      } catch (err) {
+        /* 状態が取れなくても入力自体はできる */
+      }
+    },
+
+    close: function () {
+      document.body.classList.remove("is-setup");
+      switchView("home");
+    },
+
+    go: function (step) {
+      this.step = step;
+      $$(".setup-step").forEach(el => {
+        el.classList.toggle("is-active", Number(el.dataset.step) === step);
+      });
+      $$(".step-dot").forEach(el => {
+        const value = Number(el.dataset.step);
+        el.classList.toggle("is-active", value === step);
+        el.classList.toggle("is-done", value < step);
+      });
+      $("#view-setup").scrollTop = 0;
+      window.scrollTo(0, 0);
+    },
+
+    /** 既存の設定値をフォームへ流し込む（やり直し時に空欄にしないため）。 */
+    fillFromSettings: function () {
+      $$("#view-setup [data-setting]").forEach(field => {
+        const value = state.settings[field.dataset.setting];
+        if (value === undefined || value === null) return;
+        if (field.type === "checkbox") field.checked = Boolean(value);
+        else field.value = value;
+      });
+
+      $("#setup-wake-note").textContent = window.isSecureContext
+        ? "呼びかけの判定はこの端末の中で行います。待受中はマイクを開いたままになります。"
+        : "※ 常時待受はHTTPS接続でのみ使えます。今の接続では選んでも動きません。";
+    },
+
+    collectProfile: function () {
+      const values = {};
+      $$("#view-setup [data-setting]").forEach(field => {
+        if (field.type === "checkbox") values[field.dataset.setting] = field.checked;
+        else if (field.type === "number") values[field.dataset.setting] = Number(field.value || 0);
+        else values[field.dataset.setting] = field.value.trim();
+      });
+      return values;
+    },
+
+    showResult: function (message, isError) {
+      const box = $("#setup-test-result");
+      box.textContent = message;
+      box.classList.toggle("is-error", Boolean(isError));
+      box.hidden = false;
+    },
+
+    testKey: async function () {
+      const key = $("#setup-gemini-key").value.trim();
+      const model = $("#setup-gemini-model").value;
+      if (!key) { this.showResult("APIキーを入力してから試してください。", true); return false; }
+
+      const button = $("#setup-test");
+      button.disabled = true;
+      button.textContent = "確認中…";
+      try {
+        const data = await API.testGemini(key, model);
+        this.showResult(data.ok ? "接続できました。このキーで使えます。" : data.error, !data.ok);
+        return data.ok;
+      } catch (err) {
+        this.showResult(err.message, true);
+        return false;
+      } finally {
+        button.disabled = false;
+        button.textContent = "接続テスト";
+      }
+    },
+
+    saveKeysIfEntered: async function () {
+      const payload = {
+        gemini_api_key: $("#setup-gemini-key").value.trim(),
+        gemini_model: $("#setup-gemini-model").value,
+        google_maps_api_key: $("#setup-maps-key").value.trim()
+      };
+      if (!payload.gemini_api_key && !payload.google_maps_api_key) return true;
+      try {
+        await API.saveKeys(payload);
+        // 入力欄には残さない
+        $("#setup-gemini-key").value = "";
+        $("#setup-maps-key").value = "";
+        return true;
+      } catch (err) {
+        showToast(err.message, 4000);
+        return false;
+      }
+    },
+
+    finish: async function () {
+      const button = $("#setup-finish");
+      button.disabled = true;
+      try {
+        if (!(await this.saveKeysIfEntered())) return;
+
+        const result = await API.saveProfile(this.collectProfile());
+        state.settings = result.settings;
+        if (result.warning) showToast(result.warning, 5000);
+
+        await API.completeSetup();
+        this.close();
+
+        // 待受の設定をその場で反映する
+        WakeWord.stop();
+        if (state.settings.wake_word_enabled && window.isSecureContext && Speech.supported) {
+          startWakeWord();
+        }
+        updateWakeToggle();
+        settle();
+
+        const status = await API.status();
+        showToast(status.gemini ? "準備できました。話しかけてみてください。"
+                                : "設定しました。会話にはGeminiのキーが必要です。", 4200);
+      } catch (err) {
+        showToast(err.message, 4000);
+      } finally {
+        button.disabled = false;
+      }
+    },
+
+    bind: function () {
+      $("#setup-show-key").onchange = (event) => {
+        $("#setup-gemini-key").type = event.target.checked ? "text" : "password";
+      };
+      $("#setup-test").onclick = () => this.testKey();
+
+      $("#setup-next-1").onclick = async () => {
+        const key = $("#setup-gemini-key").value.trim();
+        // 入力があるのに試していない場合は、ここで一度確かめる
+        if (key && !(await this.testKey())) return;
+        if (key) await this.saveKeysIfEntered();
+        this.go(2);
+      };
+      $("#setup-skip-1").onclick = () => this.go(2);
+
+      $("#setup-back-2").onclick = () => this.go(1);
+      $("#setup-next-2").onclick = async () => {
+        const notice = $("#setup-profile-error");
+        notice.hidden = true;
+        let result;
+        try {
+          result = await API.saveProfile(this.collectProfile());
+        } catch (err) {
+          notice.textContent = err.message;
+          notice.classList.add("is-error");
+          notice.hidden = false;
+          return;
+        }
+        state.settings = result.settings;
+
+        // 地名だけ引けなかった場合は、保存はできているのでその場に留めて知らせる
+        if (result.warning) {
+          notice.textContent = result.warning;
+          notice.classList.add("is-error");
+          notice.hidden = false;
+          $("#setup-weather_location").value = result.settings.weather_location;
+          return;
+        }
+        this.go(3);
+      };
+
+      $("#setup-back-3").onclick = () => this.go(2);
+      $("#setup-finish").onclick = () => this.finish();
+    }
+  };
 
   /* ================= 起動 ================= */
 
@@ -639,6 +837,15 @@
 
     $("#settings-form").onsubmit = saveSettings;
 
+    $("#settings-reopen-setup").onclick = async () => {
+      try {
+        await API.reopenSetup();
+        setup.open(1);
+      } catch (err) { showToast(err.message); }
+    };
+
+    setup.bind();
+
     window.addEventListener("offline", () => showToast("インターネットに接続されていません。"));
   }
 
@@ -647,26 +854,34 @@
     updateClock();
     setInterval(updateClock, 10000);
 
+    let needsSetup = false;
     try {
-      const data = await API.settings();
+      const data = await API.setupState();
       state.settings = data.settings;
+      needsSetup = data.needs_setup;
+      $("#setup-calendar-state").textContent = data.google_calendar_connected
+        ? "現在: 連携済み" : "現在: 未連携";
     } catch (err) {
       showToast(err.message);
     }
 
     // マイクは https か localhost でしか使えない。理由を先に伝えておく。
+    // セットアップ中は案内が重なるので、終わってから出す。
     if (!window.isSecureContext) {
       $("#orb-label").textContent = "タップして文字で質問";
       $("#wake-toggle").hidden = true;
-      showToast("HTTPSで開くと音声入力と常時待受が使えます（README参照）", 5000);
+      if (!needsSetup) showToast("HTTPSで開くと音声入力と常時待受が使えます（README参照）", 5000);
     } else if (!Speech.supported) {
       $("#wake-toggle").hidden = true;
-      showToast("このブラウザは音声入力に非対応です。Chromeをお試しください。", 5000);
-    } else if (state.settings.wake_word_enabled) {
+      if (!needsSetup) showToast("このブラウザは音声入力に非対応です。Chromeをお試しください。", 5000);
+    } else if (state.settings.wake_word_enabled && !needsSetup) {
       startWakeWord();
     } else {
       updateWakeToggle();
     }
+
+    // 初回はセットアップから始める（マイクは設定が終わってから使う）
+    if (needsSetup) setup.open(1);
 
     loadHome();
     state.homeTimer = setInterval(() => { if (state.view === "home") loadHome(); }, 5 * 60 * 1000);

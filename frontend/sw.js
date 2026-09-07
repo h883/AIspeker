@@ -2,7 +2,7 @@
    画面の骨組みだけをキャッシュし、API 応答はキャッシュしない。
    古い天気や予定を表示してしまわないようにするため（仕様書 22章）。 */
 
-const CACHE = "student-ai-v2";
+const CACHE = "student-ai-v3";
 const SHELL = [
   "/",
   "/index.html",
@@ -35,18 +35,17 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET" || url.origin !== self.location.origin) return;
   if (url.pathname.startsWith("/api/")) return;  // 実データは必ずネットワークから
 
+  // ネットワーク優先。Raspberry Pi に届くときは常に最新の画面を出し、
+  // 届かないときだけキャッシュで表示する（更新したのに古い画面が出るのを防ぐ）。
   event.respondWith(
-    caches.match(event.request).then(cached => {
-      const network = fetch(event.request)
-        .then(response => {
-          if (response.ok) {
-            const copy = response.clone();
-            caches.open(CACHE).then(cache => cache.put(event.request, copy));
-          }
-          return response;
-        })
-        .catch(() => cached);
-      return cached || network;
-    })
+    fetch(event.request)
+      .then(response => {
+        if (response.ok) {
+          const copy = response.clone();
+          caches.open(CACHE).then(cache => cache.put(event.request, copy));
+        }
+        return response;
+      })
+      .catch(() => caches.match(event.request).then(cached => cached || Response.error()))
   );
 });

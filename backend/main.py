@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from backend import config
 from backend.ai import gemini
-from backend.api import chat, dashboard, settings, voice
+from backend.api import chat, dashboard, settings, setup, voice
 from backend.database import db
 
 logging.basicConfig(
@@ -45,6 +45,7 @@ app.include_router(chat.router)
 app.include_router(voice.router)
 app.include_router(settings.router)
 app.include_router(dashboard.router)
+app.include_router(setup.router)
 
 
 @app.get("/api/health")
@@ -63,8 +64,24 @@ def service_worker() -> FileResponse:
     return FileResponse(config.FRONTEND_DIR / "sw.js", media_type="application/javascript")
 
 
+class AppShellStatic(StaticFiles):
+    """HTML/CSS/JS は毎回サーバーへ確認しに行かせる。
+
+    自分で書き換えながら使うアプリなので、ブラウザが古い画面を
+    掴んだままにならないようにする。画像やアイコンは通常どおりキャッシュする。
+    """
+
+    REVALIDATE = (".html", ".css", ".js", ".webmanifest")
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if path.endswith(self.REVALIDATE) or path in ("", "."):
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
+
 if config.FRONTEND_DIR.exists():
-    app.mount("/", StaticFiles(directory=config.FRONTEND_DIR, html=True), name="frontend")
+    app.mount("/", AppShellStatic(directory=config.FRONTEND_DIR, html=True), name="frontend")
 else:  # pragma: no cover - 通常は同梱されている
     @app.get("/")
     def missing_frontend() -> JSONResponse:

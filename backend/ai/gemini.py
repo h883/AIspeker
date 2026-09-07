@@ -25,6 +25,48 @@ def is_configured() -> bool:
     return bool(config.GEMINI_API_KEY)
 
 
+def verify_key(api_key: str = "", model: str = "") -> dict[str, Any]:
+    """セットアップ画面の接続テスト用。キーが実際に通るかを確かめる。
+
+    保存する前に確認できるよう、キーを引数で受け取れるようにしている。
+    """
+    key = (api_key or config.GEMINI_API_KEY).strip()
+    target_model = (model or config.GEMINI_MODEL).strip()
+    if not key:
+        return {"ok": False, "error": "APIキーが入力されていません。"}
+
+    url = f"{config.GEMINI_ENDPOINT}/models/{target_model}:generateContent"
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": "ping"}]}],
+        "generationConfig": {"maxOutputTokens": 8},
+    }
+    try:
+        response = httpx.post(
+            url,
+            json=payload,
+            headers={"x-goog-api-key": key, "Content-Type": "application/json"},
+            timeout=20,
+        )
+    except httpx.HTTPError:
+        return {"ok": False, "error": "Gemini に接続できませんでした。ネットワークを確認してください。"}
+
+    if response.status_code == 200:
+        return {"ok": True, "model": target_model, "message": "接続できました。"}
+
+    try:
+        message = response.json().get("error", {}).get("message", "")
+    except ValueError:
+        message = response.text[:200]
+
+    if response.status_code in (400, 401, 403):
+        return {"ok": False, "error": f"APIキーが正しくないようです（{message or response.status_code}）。"}
+    if response.status_code == 404:
+        return {"ok": False, "error": f"モデル {target_model} が見つかりません。モデル名を確認してください。"}
+    if response.status_code == 429:
+        return {"ok": False, "error": "利用制限に達しています。しばらく待ってから試してください。"}
+    return {"ok": False, "error": f"Gemini がエラーを返しました（{message or response.status_code}）。"}
+
+
 def _tools_payload() -> list[dict[str, Any]]:
     return [{"functionDeclarations": registry.TOOL_DECLARATIONS}]
 

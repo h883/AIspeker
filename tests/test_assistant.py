@@ -21,14 +21,17 @@ sys.path.insert(0, str(ROOT))
 _TMP = tempfile.TemporaryDirectory()
 os.environ["DB_PATH"] = str(Path(_TMP.name) / "test.db")
 os.environ["SETTINGS_PATH"] = str(Path(_TMP.name) / "settings.json")
+os.environ["ENV_PATH"] = str(Path(_TMP.name) / ".env")   # 本物の .env を触らない
 os.environ["GEMINI_API_KEY"] = "test-key"
 
+from backend import config  # noqa: E402
 from backend.ai import gemini  # noqa: E402
 from backend.database import db  # noqa: E402
 from backend.tools import registry  # noqa: E402
 from backend.tools import reminder as reminder_tool  # noqa: E402
 from backend.tools import routes as routes_tool  # noqa: E402
 from backend.tools import time as time_tool  # noqa: E402
+from backend.tools import weather as weather_tool  # noqa: E402
 
 
 class DateParsingTest(unittest.TestCase):
@@ -102,6 +105,64 @@ class ToolRegistryTest(unittest.TestCase):
         with mock.patch.dict(registry.HANDLERS, {"boom": mock.Mock(side_effect=RuntimeError("x"))}):
             result = registry.call_tool("boom", {})
         self.assertFalse(result["ok"])
+
+
+class EnvUpdateTest(unittest.TestCase):
+    """セットアップ画面からの .env 書き換え（再起動なしで反映されること）。"""
+
+    def setUp(self) -> None:
+        config.ENV_PATH.write_text(
+            "# コメントは残す\nGEMINI_API_KEY=old-key\nPORT=8000\n", encoding="utf-8"
+        )
+
+    def test_updates_value_and_keeps_comments(self) -> None:
+        saved = config.update_env({"GEMINI_API_KEY": "new-key"})
+        self.assertEqual(saved, ["GEMINI_API_KEY"])
+
+        text = config.ENV_PATH.read_text(encoding="utf-8")
+        self.assertIn("# コメントは残す", text)
+        self.assertIn("GEMINI_API_KEY=new-key", text)
+        self.assertIn("PORT=8000", text)
+        # 再起動なしでモジュール側にも反映される
+        self.assertEqual(config.GEMINI_API_KEY, "new-key")
+
+    def test_appends_missing_key(self) -> None:
+        config.update_env({"GOOGLE_MAPS_API_KEY": "maps-key"})
+        self.assertIn("GOOGLE_MAPS_API_KEY=maps-key", config.ENV_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(config.GOOGLE_MAPS_API_KEY, "maps-key")
+
+    def test_blank_value_does_not_erase(self) -> None:
+        """空欄のまま保存しても、登録済みの鍵を消さない。"""
+        saved = config.update_env({"GEMINI_API_KEY": "   "})
+        self.assertEqual(saved, [])
+        self.assertIn("GEMINI_API_KEY=old-key", config.ENV_PATH.read_text(encoding="utf-8"))
+
+    def test_unknown_key_is_ignored(self) -> None:
+        config.update_env({"SSL_KEY_FILE": "/etc/passwd", "PATH": "/tmp"})
+        text = config.ENV_PATH.read_text(encoding="utf-8")
+        self.assertNotIn("SSL_KEY_FILE", text)
+        self.assertNotIn("PATH=", text)
+
+
+class GeocodeCandidateTest(unittest.TestCase):
+    """Open-Meteo は市名しか引けないので、区名などから候補を作れているか。"""
+
+    def test_ward_falls_back_to_city(self) -> None:
+        self.assertIn("大阪市", weather_tool.geocode_candidates("大阪市天王寺区"))
+
+    def test_prefecture_prefix_is_stripped(self) -> None:
+        candidates = weather_tool.geocode_candidates("東京都新宿区")
+        self.assertIn("新宿区", candidates)
+        self.assertIn("新宿", candidates)
+
+    def test_bare_name_gets_city_suffix(self) -> None:
+        self.assertIn("大阪市", weather_tool.geocode_candidates("大阪"))
+
+    def test_original_comes_first(self) -> None:
+        self.assertEqual(weather_tool.geocode_candidates("神戸市")[0], "神戸市")
+
+    def test_empty_returns_nothing(self) -> None:
+        self.assertEqual(weather_tool.geocode_candidates("  "), [])
 
 
 class GeminiLoopTest(unittest.TestCase):

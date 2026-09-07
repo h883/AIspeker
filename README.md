@@ -26,13 +26,21 @@ Windows の場合:
 
 起動したら、同じ Wi-Fi のスマートフォンから表示された URL を開いてください。
 
-### 最初にやること
+### 最初にやること — セットアップ画面で入力するだけ
 
-1. https://aistudio.google.com/apikey で Gemini API キーを取得する
-2. `.env` を開いて `GEMINI_API_KEY=` の行に貼り付ける
-3. `./run.sh` をもう一度実行する
+初回に開くとセットアップ画面が出ます。`.env` を手で編集する必要はありません。
 
-キーが無くても画面は開きます（天気・予定・リマインダーは動きます）が、AI との会話はできません。
+| ステップ | 入力するもの |
+|---|---|
+| 1 | Gemini APIキー（[取得はこちら](https://aistudio.google.com/apikey)）。**接続テスト**でその場で確認できます |
+| 2 | 呼び名・学校名と所在地・授業開始時刻・自宅住所・移動手段・余裕時間・天気の地域 |
+| 3 | 任意（Google Maps APIキー、呼びかけ待受、Google カレンダー） |
+
+入力した内容は Raspberry Pi 側の `.env` と `config/settings.json` にだけ保存され、
+**保存後は再起動なしですぐ反映されます**。画面からキーの中身を読み出すことはできません（仕様書 21章）。
+
+APIキーは「あとで設定する」で飛ばせます。キーが無くても天気・予定・リマインダーは動きます。
+あとから変えたいときは、設定画面の一番下にある「セットアップをやり直す」から同じ画面を開けます。
 
 ---
 
@@ -131,8 +139,10 @@ Raspberry Pi に USB マイクを付けて **openWakeWord** をローカルで�
 
 1. Google Cloud Console で **Routes API** を有効にする
 2. API キーを作る
-3. `.env` の `GOOGLE_MAPS_API_KEY=` に貼る
-4. アプリの「設定」画面で自宅住所と学校の所在地を登録する
+3. セットアップ画面のステップ3、または設定画面の「セットアップをやり直す」から貼り付ける
+4. 同じ画面で自宅住所と学校の所在地を登録する
+
+`.env` の `GOOGLE_MAPS_API_KEY=` に直接書いても構いません（その場合は再起動が必要です）。
 
 ### Google カレンダーを繋ぐ
 
@@ -194,7 +204,7 @@ student-ai-assistant/
 │   ├── tools/             Tool Calling で呼ばれる7つの機能
 │   ├── audio/             サーバー側 STT/TTS（任意）
 │   ├── database/          SQLite
-│   └── api/               chat / voice / settings / dashboard
+│   └── api/               chat / voice / settings / dashboard / setup
 ├── frontend/              Web UI（PWA）
 ├── scripts/               証明書・Google認証・systemd・アイコン生成
 ├── tests/                 標準ライブラリのみのテスト
@@ -243,6 +253,7 @@ pip install -r requirements-optional.txt
 | `GET/POST/DELETE` | `/api/reminders` | リマインダー |
 | `GET/PUT` | `/api/settings` | ユーザー設定 |
 | `GET` | `/api/status` | どの機能が有効かの診断 |
+| `GET/POST` | `/api/setup` `/api/setup/keys` | セットアップ（キーの保存・接続テスト） |
 | `GET` | `/docs` | 自動生成される API ドキュメント |
 
 ---
@@ -252,8 +263,11 @@ pip install -r requirements-optional.txt
 - マイク音声は既定でサーバーに保存しません（`SAVE_AUDIO=0`）
 - 会話履歴は SQLite に保存され、設定画面から全削除できます（`SAVE_HISTORY=0` で保存自体を止められます）
 - 住所などのセンシティブな情報は `config/settings.json` に置かれ、Git 管理外です
-- Service Worker は画面の骨組みだけをキャッシュし、API 応答はキャッシュしません
-  （古い天気や予定を表示しないため）
+- APIキーは `.env` にのみ保存し、`GET /api/setup` は「設定済みかどうか」しか返しません
+  （キーの値を画面へ返す経路はありません）
+- セットアップ画面には認証がありません。信頼できる家庭内LANで使う前提です
+- Service Worker はネットワーク優先で動き、API 応答はキャッシュしません
+  （古い天気や予定を表示しないため。オフライン時だけ画面の骨組みをキャッシュから出します）
 
 ---
 

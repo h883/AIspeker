@@ -52,6 +52,15 @@
     deleteReminder:(id)             => request("/api/reminders/" + id, { method: "DELETE" }),
     dueReminders:  ()               => request("/api/reminders/due"),
     settings:      ()               => request("/api/settings"),
-    saveSettings:  (values)         => request("/api/settings", json("PUT", { values: values }))
+    saveSettings:  (values)         => request("/api/settings", json("PUT", { values: values })),
+
+    /* --- 初回セットアップ --- */
+    setupState:    ()               => request("/api/setup"),
+    testGemini:    (key, model)     => request("/api/setup/test-gemini",
+                                        json("POST", { api_key: key, model: model })),
+    saveKeys:      (keys)           => request("/api/setup/keys", json("POST", keys)),
+    saveProfile:   (values)         => request("/api/setup/profile", json("POST", { values: values })),
+    completeSetup: ()               => request("/api/setup/complete", { method: "POST" }),
+    reopenSetup:   ()               => request("/api/setup/reopen", { method: "POST" })
   };
 })(window);

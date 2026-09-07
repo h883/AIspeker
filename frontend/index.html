@@ -16,6 +16,139 @@
 
 <div id="app">
 
+  <!-- ================= 初回セットアップ ================= -->
+  <section class="view setup" id="view-setup">
+    <div class="setup-progress">
+      <span class="step-dot is-active" data-step="1"></span>
+      <span class="step-dot" data-step="2"></span>
+      <span class="step-dot" data-step="3"></span>
+    </div>
+
+    <!-- ステップ1: Gemini APIキー -->
+    <div class="setup-step is-active" data-step="1">
+      <h1>はじめまして</h1>
+      <p class="setup-lead">
+        学校生活を手伝うAIアシスタントです。<br>
+        最初に、会話に使う Gemini のAPIキーを登録します。
+      </p>
+
+      <ol class="setup-howto">
+        <li><a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> を開く</li>
+        <li>「Create API key」でキーを作る</li>
+        <li>コピーして下の欄に貼り付ける</li>
+      </ol>
+
+      <label class="field-label" for="setup-gemini-key">Gemini APIキー</label>
+      <input id="setup-gemini-key" type="password" autocomplete="off" spellcheck="false"
+             placeholder="AIza... から始まる文字列">
+      <label class="switch"><input id="setup-show-key" type="checkbox"> 入力した文字を表示する</label>
+
+      <label class="field-label" for="setup-gemini-model">モデル</label>
+      <select id="setup-gemini-model">
+        <option value="gemini-2.5-flash">gemini-2.5-flash（速い・おすすめ）</option>
+        <option value="gemini-2.5-pro">gemini-2.5-pro（賢い・少し遅い）</option>
+      </select>
+
+      <button id="setup-test" class="secondary" type="button">接続テスト</button>
+      <p id="setup-test-result" class="setup-result" hidden></p>
+
+      <p class="note">
+        キーは Raspberry Pi の <code>.env</code> にだけ保存され、この画面から中身を読み出すことはできません。
+        GitHub にも上がりません（仕様書 21章）。
+      </p>
+
+      <div class="setup-actions">
+        <button class="ghost" id="setup-skip-1" type="button">あとで設定する</button>
+        <button id="setup-next-1" type="button">次へ</button>
+      </div>
+    </div>
+
+    <!-- ステップ2: あなたのこと -->
+    <div class="setup-step" data-step="2">
+      <h1>あなたのこと</h1>
+      <p class="setup-lead">
+        「明日何時に家を出たらいい？」に答えるために使います。<br>
+        あとから設定画面で変えられます。
+      </p>
+
+      <label class="field-label" for="setup-user_name">呼び名</label>
+      <input id="setup-user_name" data-setting="user_name" type="text" placeholder="たろう">
+
+      <label class="field-label" for="setup-school_name">学校名</label>
+      <input id="setup-school_name" data-setting="school_name" type="text" placeholder="○○専門学校">
+
+      <label class="field-label" for="setup-school_address">学校の所在地</label>
+      <input id="setup-school_address" data-setting="school_address" type="text"
+             placeholder="大阪市西区西本町1-1-1">
+
+      <label class="field-label" for="setup-school_start_time">いつもの授業開始時刻</label>
+      <input id="setup-school_start_time" data-setting="school_start_time" type="time">
+
+      <label class="field-label" for="setup-home_address">自宅住所（経路の出発地に使います）</label>
+      <input id="setup-home_address" data-setting="home_address" type="text"
+             placeholder="大阪市北区梅田1-1-1">
+
+      <label class="field-label" for="setup-travel_mode">いつもの移動手段</label>
+      <select id="setup-travel_mode" data-setting="travel_mode">
+        <option value="transit">電車・バス</option>
+        <option value="walking">徒歩</option>
+        <option value="bicycling">自転車</option>
+        <option value="driving">車</option>
+      </select>
+
+      <label class="field-label" for="setup-buffer_minutes">余裕を見る時間（分）</label>
+      <input id="setup-buffer_minutes" data-setting="buffer_minutes" type="number" min="0" max="120">
+
+      <label class="field-label" for="setup-rain_extra_minutes">雨の日に足す時間（分）</label>
+      <input id="setup-rain_extra_minutes" data-setting="rain_extra_minutes" type="number" min="0" max="120">
+
+      <label class="field-label" for="setup-weather_location">天気を見る地域</label>
+      <input id="setup-weather_location" data-setting="weather_location" type="text" placeholder="大阪市">
+
+      <p id="setup-profile-error" class="setup-result is-error" hidden></p>
+
+      <div class="setup-actions">
+        <button class="ghost" id="setup-back-2" type="button">戻る</button>
+        <button id="setup-next-2" type="button">次へ</button>
+      </div>
+    </div>
+
+    <!-- ステップ3: 任意の設定 -->
+    <div class="setup-step" data-step="3">
+      <h1>もう少しだけ</h1>
+      <p class="setup-lead">ここは全部あとからでも大丈夫です。</p>
+
+      <h2>経路検索（任意）</h2>
+      <p class="note">
+        「学校まで何分？」に答えるには Google Cloud で Routes API を有効にしたキーが要ります。
+        未設定でも他の機能は動きます。
+      </p>
+      <label class="field-label" for="setup-maps-key">Google Maps APIキー</label>
+      <input id="setup-maps-key" type="password" autocomplete="off" spellcheck="false" placeholder="未設定のままでもOK">
+
+      <h2>呼びかけで起こす（任意）</h2>
+      <label class="switch">
+        <input id="setup-wake_word_enabled" data-setting="wake_word_enabled" type="checkbox">
+        「ねえAI」と呼びかけたら反応する
+      </label>
+      <label class="field-label" for="setup-wake_word">呼びかけの言葉</label>
+      <input id="setup-wake_word" data-setting="wake_word" type="text" placeholder="ねえAI">
+      <p id="setup-wake-note" class="note"></p>
+
+      <h2>Google カレンダー（任意）</h2>
+      <p class="note">
+        パソコンで <code>python scripts/google_auth.py</code> を実行すると連携できます。
+        未連携のあいだは、アプリ内の予定表を使います。
+      </p>
+      <p id="setup-calendar-state" class="note"></p>
+
+      <div class="setup-actions">
+        <button class="ghost" id="setup-back-3" type="button">戻る</button>
+        <button id="setup-finish" type="button">はじめる</button>
+      </div>
+    </div>
+  </section>
+
   <!-- ================= ホーム ================= -->
   <section class="view is-active" id="view-home">
     <header class="statusbar">
@@ -196,6 +329,10 @@
       <button type="submit">保存</button>
       <p id="settings-saved" class="saved-note" hidden>保存しました</p>
     </form>
+
+    <button id="settings-reopen-setup" class="secondary" type="button">
+      セットアップをやり直す（APIキーの変更もここから）
+    </button>
   </section>
 
   <!-- ================= タブ ================= -->

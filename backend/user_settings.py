@@ -10,6 +10,8 @@ from backend import config
 _lock = threading.Lock()
 
 DEFAULTS: dict[str, Any] = {
+    # 初回起動時はセットアップ画面を出す（仕様書 17章）
+    "setup_completed": False,
     "user_name": "",
     "school_name": "学校",
     "school_address": "",
