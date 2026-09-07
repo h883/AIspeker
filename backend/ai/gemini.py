@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Any
 
 import httpx
@@ -61,6 +62,8 @@ def explain_error(status: int, message: str) -> str:
         return "APIキーが正しくありません。余分な空白が入っていないか確認してください。"
     if status == 429 or "quota" in lowered or "rate limit" in lowered:
         return "利用制限に達しています。しばらく待ってから試してください。"
+    if status in (500, 502, 503, 504) or "high demand" in lowered or "overloaded" in lowered:
+        return "AIサービスが混み合っています。少し待ってからもう一度話しかけてください。"
     if status in (401, 403):
         return f"Gemini の利用を許可されませんでした（{message}）。"
     return f"Gemini がエラーを返しました（{message}）。"
@@ -251,30 +254,44 @@ def _tools_payload() -> list[dict[str, Any]]:
     return [{"functionDeclarations": registry.TOOL_DECLARATIONS}]
 
 
+# 一時的な混雑や瞬断。少し待って同じ内容を送り直せば通ることが多い。
+_RETRYABLE_STATUS = (500, 502, 503, 504)
+_RETRY_DELAYS = (1.0, 3.0)
+
+
 def _request(payload: dict[str, Any]) -> dict[str, Any]:
     url = f"{config.GEMINI_ENDPOINT}/models/{config.GEMINI_MODEL}:generateContent"
-    try:
-        response = httpx.post(
-            url,
-            json=payload,
-            headers={
-                "x-goog-api-key": config.GEMINI_API_KEY,
-                "Content-Type": "application/json",
-            },
-            timeout=config.GEMINI_TIMEOUT,
-        )
-    except httpx.HTTPError as exc:
-        raise GeminiError("現在AIサービスに接続できません。") from exc
+    headers = {
+        "x-goog-api-key": config.GEMINI_API_KEY,
+        "Content-Type": "application/json",
+    }
 
-    if response.status_code >= 400:
+    last_error: GeminiError | None = None
+    for attempt in range(len(_RETRY_DELAYS) + 1):
+        if attempt:
+            time.sleep(_RETRY_DELAYS[attempt - 1])
+            logger.info("Gemini へ再試行します（%d回目）", attempt + 1)
+
+        try:
+            response = httpx.post(url, json=payload, headers=headers, timeout=config.GEMINI_TIMEOUT)
+        except httpx.HTTPError as exc:
+            last_error = GeminiError("現在AIサービスに接続できません。")
+            last_error.__cause__ = exc
+            continue
+
+        if response.status_code < 400:
+            try:
+                return response.json()
+            except ValueError as exc:
+                raise GeminiError("AIサービスの応答を解析できませんでした。") from exc
+
         message = _error_message(response)
         logger.error("gemini error %s: %s", response.status_code, message)
-        raise GeminiError(explain_error(response.status_code, message))
+        if response.status_code not in _RETRYABLE_STATUS:
+            raise GeminiError(explain_error(response.status_code, message))
+        last_error = GeminiError(explain_error(response.status_code, message))
 
-    try:
-        return response.json()
-    except ValueError as exc:
-        raise GeminiError("AIサービスの応答を解析できませんでした。") from exc
+    raise last_error or GeminiError("現在AIサービスに接続できません。")
 
 
 def _extract_parts(data: dict[str, Any]) -> list[dict[str, Any]]:

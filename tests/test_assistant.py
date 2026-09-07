@@ -374,8 +374,46 @@ class GeminiLoopTest(unittest.TestCase):
                 gemini.ask("こんにちは")
         self.assertIn("APIキー", str(ctx.exception))
 
+    def test_transient_overload_is_retried(self) -> None:
+        """503（混雑）は一度きりで諦めず、少し待って送り直す。"""
+        busy = mock.Mock()
+        busy.status_code = 503
+        busy.json.return_value = {"error": {"message": "This model is currently experiencing high demand."}}
+        good = self._response({
+            "candidates": [{"content": {"parts": [{"text": "はい。"}]}}]
+        })
+        with mock.patch.object(gemini.httpx, "post", side_effect=[busy, good]) as post, \
+             mock.patch.object(gemini.time, "sleep") as sleep:
+            result = gemini.ask("こんにちは")
+
+        self.assertEqual(result["text"], "はい。")
+        self.assertEqual(post.call_count, 2)
+        sleep.assert_called_once()
+
+    def test_retries_give_up_with_a_clear_message(self) -> None:
+        busy = mock.Mock()
+        busy.status_code = 503
+        busy.json.return_value = {"error": {"message": "high demand"}}
+        with mock.patch.object(gemini.httpx, "post", return_value=busy) as post, \
+             mock.patch.object(gemini.time, "sleep"):
+            with self.assertRaises(gemini.GeminiError) as ctx:
+                gemini.ask("こんにちは")
+
+        self.assertIn("混み合っています", str(ctx.exception))
+        self.assertEqual(post.call_count, 3)   # 初回 + 再試行2回
+
+    def test_permanent_error_is_not_retried(self) -> None:
+        denied = mock.Mock()
+        denied.status_code = 403
+        denied.json.return_value = {"error": {"message": "API key not valid"}}
+        with mock.patch.object(gemini.httpx, "post", return_value=denied) as post:
+            with self.assertRaises(gemini.GeminiError):
+                gemini.ask("こんにちは")
+        self.assertEqual(post.call_count, 1)
+
     def test_connection_failure_message(self) -> None:
-        with mock.patch.object(gemini.httpx, "post", side_effect=gemini.httpx.ConnectError("x")):
+        with mock.patch.object(gemini.httpx, "post", side_effect=gemini.httpx.ConnectError("x")), \
+             mock.patch.object(gemini.time, "sleep"):
             with self.assertRaises(gemini.GeminiError) as ctx:
                 gemini.ask("こんにちは")
         self.assertIn("接続できません", str(ctx.exception))
