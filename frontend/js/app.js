@@ -571,6 +571,12 @@
         $("#setup-calendar-state").textContent = data.google_calendar_connected
           ? "現在: 連携済み" : "現在: 未連携";
         this.fillFromSettings();
+
+        // 登録済みのキーがあるなら、その場で使えるモデルを出しておく
+        if (data.gemini_configured) {
+          const listing = await API.listModels("");
+          if (listing.ok) this.fillModels(listing.models, data.gemini_model);
+        }
       } catch (err) {
         /* 状態が取れなくても入力自体はできる */
       }
@@ -626,18 +632,50 @@
       box.hidden = false;
     },
 
-    testKey: async function () {
+    /** そのキーで使えるモデルだけを選択肢にする。 */
+    fillModels: function (models, preferred) {
+      if (!models || !models.length) return;
+      const select = $("#setup-gemini-model");
+      const wanted = preferred || select.value;
+      select.innerHTML = "";
+      models.forEach(model => {
+        const option = document.createElement("option");
+        option.value = model.name;
+        option.textContent = model.label && model.label !== model.name
+          ? model.name + "（" + model.label + "）"
+          : model.name;
+        select.appendChild(option);
+      });
+      select.value = models.some(m => m.name === wanted) ? wanted : models[0].name;
+      $("#setup-model-note").textContent =
+        "このキーで使えるモデル " + models.length + " 件から選べます。";
+    },
+
+    testKey: async function (retried) {
       const key = $("#setup-gemini-key").value.trim();
-      const model = $("#setup-gemini-model").value;
       if (!key) { this.showResult("APIキーを入力してから試してください。", true); return false; }
 
       const button = $("#setup-test");
       button.disabled = true;
       button.textContent = "確認中…";
       try {
-        const data = await API.testGemini(key, model);
-        this.showResult(data.ok ? "接続できました。このキーで使えます。" : data.error, !data.ok);
-        return data.ok;
+        const data = await API.testGemini(key, $("#setup-gemini-model").value);
+
+        // 使えるモデルが分かったら、まず選択肢を作り直す
+        if (data.models) this.fillModels(data.models, data.ok ? data.model : data.recommended);
+
+        if (data.ok) {
+          this.showResult("接続できました。モデルは " + data.model + " を使います。", false);
+          return true;
+        }
+        // 選んでいたモデルが使えなかった場合は、使えるものへ切り替えて一度だけやり直す
+        if (!retried && data.recommended) {
+          button.textContent = "接続テスト";
+          button.disabled = false;
+          return await this.testKey(true);
+        }
+        this.showResult(data.error, true);
+        return false;
       } catch (err) {
         this.showResult(err.message, true);
         return false;

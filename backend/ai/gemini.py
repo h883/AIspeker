@@ -25,15 +25,120 @@ def is_configured() -> bool:
     return bool(config.GEMINI_API_KEY)
 
 
-def verify_key(api_key: str = "", model: str = "") -> dict[str, Any]:
-    """セットアップ画面の接続テスト用。キーが実際に通るかを確かめる。
+def _error_message(response: httpx.Response) -> str:
+    try:
+        return response.json().get("error", {}).get("message", "") or str(response.status_code)
+    except ValueError:
+        return response.text[:200] or str(response.status_code)
 
-    保存する前に確認できるよう、キーを引数で受け取れるようにしている。
+
+# 会話に使えないモデル（埋め込み・画像生成・音声など）を名前で除く
+_NON_CHAT_HINTS = ("embedding", "embed", "aqa", "imagen", "veo", "-tts", "image-generation")
+
+
+def _is_chat_model(item: dict[str, Any]) -> bool:
+    name = item.get("name", "").removeprefix("models/")
+    if not name or any(hint in name for hint in _NON_CHAT_HINTS):
+        return False
+    return "generateContent" in (item.get("supportedGenerationMethods") or [])
+
+
+def _model_rank(name: str) -> tuple[int, str]:
+    """使いやすい順に並べる。応答が速い flash を優先する。"""
+    if "flash-lite" in name:
+        order = 1
+    elif "flash" in name:
+        order = 0
+    elif "pro" in name:
+        order = 2
+    else:
+        order = 3
+    # 同じ系統なら新しいバージョンが先に来るよう、名前の降順を添える
+    return (order, name)
+
+
+def list_models(api_key: str = "") -> dict[str, Any]:
+    """このキーで実際に使えるモデルの一覧を取得する。
+
+    使えないモデルを選ばせて後から 404 になるのを防ぐため、
+    セットアップ画面の選択肢はこの結果から作る。
     """
     key = (api_key or config.GEMINI_API_KEY).strip()
-    target_model = (model or config.GEMINI_MODEL).strip()
     if not key:
         return {"ok": False, "error": "APIキーが入力されていません。"}
+
+    models: list[dict[str, Any]] = []
+    page_token = ""
+    try:
+        for _ in range(5):  # 念のためページ数に上限を設ける
+            params = {"pageSize": 200}
+            if page_token:
+                params["pageToken"] = page_token
+            response = httpx.get(
+                f"{config.GEMINI_ENDPOINT}/models",
+                params=params,
+                headers={"x-goog-api-key": key},
+                timeout=20,
+            )
+            if response.status_code != 200:
+                message = _error_message(response)
+                if response.status_code in (400, 401, 403):
+                    return {"ok": False, "error": f"APIキーが正しくないようです（{message}）。"}
+                if response.status_code == 429:
+                    return {"ok": False, "error": "利用制限に達しています。しばらく待ってから試してください。"}
+                return {"ok": False, "error": f"Gemini がエラーを返しました（{message}）。"}
+
+            payload = response.json()
+            for item in payload.get("models") or []:
+                if not _is_chat_model(item):
+                    continue
+                name = item["name"].removeprefix("models/")
+                models.append({
+                    "name": name,
+                    "label": item.get("displayName") or name,
+                })
+            page_token = payload.get("nextPageToken") or ""
+            if not page_token:
+                break
+    except (httpx.HTTPError, ValueError):
+        return {"ok": False, "error": "Gemini に接続できませんでした。ネットワークを確認してください。"}
+
+    if not models:
+        return {"ok": False, "error": "このキーで使える会話モデルが見つかりませんでした。"}
+
+    models.sort(key=lambda item: _model_rank(item["name"]))
+    return {"ok": True, "models": models, "recommended": models[0]["name"]}
+
+
+def verify_key(api_key: str = "", model: str = "") -> dict[str, Any]:
+    """セットアップ画面の接続テスト用。
+
+    まずモデル一覧でキーの有効性を確かめ、そのうえで
+    選ばれたモデルが実際に応答するかを見る。保存前に確認できるよう
+    キーを引数で受け取る。
+    """
+    key = (api_key or config.GEMINI_API_KEY).strip()
+    if not key:
+        return {"ok": False, "error": "APIキーが入力されていません。"}
+
+    listing = list_models(key)
+    if not listing["ok"]:
+        return listing
+
+    available = [item["name"] for item in listing["models"]]
+    target_model = (model or config.GEMINI_MODEL).strip()
+
+    # 選ばれたモデルが使えない場合は、使えるものを提案して選び直させる
+    if target_model not in available:
+        return {
+            "ok": False,
+            "models": listing["models"],
+            "recommended": listing["recommended"],
+            "error": (
+                f"このキーでは {target_model} を使えません。"
+                f"「{listing['recommended']}」など、使えるモデルに切り替えてください。"
+            ),
+        }
 
     url = f"{config.GEMINI_ENDPOINT}/models/{target_model}:generateContent"
     payload = {
@@ -51,20 +156,20 @@ def verify_key(api_key: str = "", model: str = "") -> dict[str, Any]:
         return {"ok": False, "error": "Gemini に接続できませんでした。ネットワークを確認してください。"}
 
     if response.status_code == 200:
-        return {"ok": True, "model": target_model, "message": "接続できました。"}
+        return {
+            "ok": True,
+            "model": target_model,
+            "models": listing["models"],
+            "recommended": listing["recommended"],
+            "message": "接続できました。",
+        }
 
-    try:
-        message = response.json().get("error", {}).get("message", "")
-    except ValueError:
-        message = response.text[:200]
-
-    if response.status_code in (400, 401, 403):
-        return {"ok": False, "error": f"APIキーが正しくないようです（{message or response.status_code}）。"}
-    if response.status_code == 404:
-        return {"ok": False, "error": f"モデル {target_model} が見つかりません。モデル名を確認してください。"}
+    message = _error_message(response)
     if response.status_code == 429:
-        return {"ok": False, "error": "利用制限に達しています。しばらく待ってから試してください。"}
-    return {"ok": False, "error": f"Gemini がエラーを返しました（{message or response.status_code}）。"}
+        return {"ok": False, "models": listing["models"],
+                "error": "利用制限に達しています。しばらく待ってから試してください。"}
+    return {"ok": False, "models": listing["models"],
+            "error": f"{target_model} で応答を得られませんでした（{message}）。"}
 
 
 def _tools_payload() -> list[dict[str, Any]]:

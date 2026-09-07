@@ -144,6 +144,64 @@ class EnvUpdateTest(unittest.TestCase):
         self.assertNotIn("PATH=", text)
 
 
+class ModelListingTest(unittest.TestCase):
+    """使えないモデルを選ばせて後から 404 にならないようにする仕掛け。"""
+
+    LISTING = {
+        "models": [
+            {"name": "models/gemini-2.5-pro", "displayName": "Pro",
+             "supportedGenerationMethods": ["generateContent"]},
+            {"name": "models/gemini-2.5-flash", "displayName": "Flash",
+             "supportedGenerationMethods": ["generateContent"]},
+            {"name": "models/text-embedding-004",
+             "supportedGenerationMethods": ["embedContent"]},
+            {"name": "models/imagen-3.0", "supportedGenerationMethods": ["predict"]},
+        ]
+    }
+
+    def _ok(self, payload: dict):
+        response = mock.Mock()
+        response.status_code = 200
+        response.json.return_value = payload
+        return response
+
+    def test_only_chat_models_are_offered(self) -> None:
+        with mock.patch.object(gemini.httpx, "get", return_value=self._ok(self.LISTING)):
+            result = gemini.list_models("some-key")
+        names = [item["name"] for item in result["models"]]
+        self.assertEqual(names, ["gemini-2.5-flash", "gemini-2.5-pro"])
+        self.assertEqual(result["recommended"], "gemini-2.5-flash")
+
+    def test_unusable_model_is_reported_with_alternatives(self) -> None:
+        """使えないモデルを選んだときは、代わりに使えるものを返す。"""
+        listing = {"models": [self.LISTING["models"][1]]}   # flash のみ
+        with mock.patch.object(gemini.httpx, "get", return_value=self._ok(listing)):
+            result = gemini.verify_key("some-key", "gemini-2.5-pro")
+
+        self.assertFalse(result["ok"])
+        self.assertIn("gemini-2.5-pro を使えません", result["error"])
+        self.assertEqual(result["recommended"], "gemini-2.5-flash")
+        self.assertEqual([m["name"] for m in result["models"]], ["gemini-2.5-flash"])
+
+    def test_bad_key_is_reported_before_choosing_a_model(self) -> None:
+        denied = mock.Mock()
+        denied.status_code = 403
+        denied.json.return_value = {"error": {"message": "API key not valid"}}
+        with mock.patch.object(gemini.httpx, "get", return_value=denied):
+            result = gemini.verify_key("bad-key", "gemini-2.5-flash")
+        self.assertFalse(result["ok"])
+        self.assertIn("APIキー", result["error"])
+
+    def test_usable_model_passes(self) -> None:
+        generate = mock.Mock()
+        generate.status_code = 200
+        with mock.patch.object(gemini.httpx, "get", return_value=self._ok(self.LISTING)), \
+             mock.patch.object(gemini.httpx, "post", return_value=generate):
+            result = gemini.verify_key("some-key", "gemini-2.5-flash")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["model"], "gemini-2.5-flash")
+
+
 class AssetVersionTest(unittest.TestCase):
     """更新したのにブラウザが古い画面を出し続ける事故を防ぐ仕掛け。"""
 

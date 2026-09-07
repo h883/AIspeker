@@ -58,6 +58,7 @@
     setupState:    ()               => request("/api/setup"),
     testGemini:    (key, model)     => request("/api/setup/test-gemini",
                                         json("POST", { api_key: key, model: model })),
+    listModels:    (key)            => request("/api/setup/models", json("POST", { api_key: key })),
     saveKeys:      (keys)           => request("/api/setup/keys", json("POST", keys)),
     saveProfile:   (values)         => request("/api/setup/profile", json("POST", { values: values })),
     completeSetup: ()               => request("/api/setup/complete", { method: "POST" }),

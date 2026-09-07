@@ -62,6 +62,12 @@ def test_gemini(payload: KeyTest) -> dict:
     return gemini.verify_key(payload.api_key, payload.model)
 
 
+@router.post("/models")
+def models(payload: KeyTest) -> dict:
+    """このキーで使えるモデルの一覧。選択肢をここから作る。"""
+    return gemini.list_models(payload.api_key)
+
+
 @router.post("/keys")
 def save_keys(payload: KeySave) -> dict:
     """APIキーを .env へ書き込み、その場で反映する。"""
