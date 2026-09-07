@@ -144,6 +144,35 @@ class EnvUpdateTest(unittest.TestCase):
         self.assertNotIn("PATH=", text)
 
 
+class AssetVersionTest(unittest.TestCase):
+    """更新したのにブラウザが古い画面を出し続ける事故を防ぐ仕掛け。"""
+
+    def test_placeholder_is_replaced(self) -> None:
+        from backend import main
+
+        html = main.render_index().body.decode("utf-8")
+        self.assertNotIn("__ASSET_VERSION__", html)
+        self.assertIn(f"/js/app.js?v={main.asset_version()}", html)
+
+    def test_index_is_never_cached(self) -> None:
+        from backend import main
+
+        self.assertEqual(main.render_index().headers["Cache-Control"], "no-store")
+
+    def test_version_changes_when_a_file_changes(self) -> None:
+        from backend import main
+
+        before = main.asset_version()
+        app_js = main.config.FRONTEND_DIR / "js" / "app.js"
+        original = app_js.stat().st_mtime
+        try:
+            os.utime(app_js, (original + 60, original + 60))
+            self.assertNotEqual(main.asset_version(), before)
+        finally:
+            os.utime(app_js, (original, original))
+        self.assertEqual(main.asset_version(), before)
+
+
 class GeocodeCandidateTest(unittest.TestCase):
     """Open-Meteo は市名しか引けないので、区名などから候補を作れているか。"""
 

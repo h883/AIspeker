@@ -1,11 +1,12 @@
 """Student AI Assistant — FastAPI エントリポイント（仕様書 25章）。"""
 from __future__ import annotations
 
+import hashlib
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend import config
@@ -62,6 +63,35 @@ def manifest() -> FileResponse:
 def service_worker() -> FileResponse:
     # Service Worker はスコープの都合上ルートから配信する必要がある
     return FileResponse(config.FRONTEND_DIR / "sw.js", media_type="application/javascript")
+
+
+VERSIONED_ASSETS = ("css/style.css", "js/api.js", "js/speech.js", "js/wakeword.js", "js/app.js")
+
+
+def asset_version() -> str:
+    """CSS/JS の更新時刻から算出する短い版番号。
+
+    これを各ファイルの URL に ?v= として付けることで、
+    書き換えたのにブラウザが古いファイルを使い続ける事故を防ぐ。
+    """
+    stamps = []
+    for name in VERSIONED_ASSETS:
+        path = config.FRONTEND_DIR / name
+        stamps.append(str(int(path.stat().st_mtime)) if path.exists() else "0")
+    digest = hashlib.sha1("|".join(stamps).encode("utf-8")).hexdigest()
+    return digest[:10]
+
+
+def render_index() -> HTMLResponse:
+    html = (config.FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
+    html = html.replace("__ASSET_VERSION__", asset_version())
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/", include_in_schema=False)
+@app.get("/index.html", include_in_schema=False)
+def index() -> HTMLResponse:
+    return render_index()
 
 
 class AppShellStatic(StaticFiles):
