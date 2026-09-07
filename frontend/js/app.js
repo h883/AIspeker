@@ -651,7 +651,7 @@
         "このキーで使えるモデル " + models.length + " 件から選べます。";
     },
 
-    testKey: async function (retried) {
+    testKey: async function () {
       const key = $("#setup-gemini-key").value.trim();
       if (!key) { this.showResult("APIキーを入力してから試してください。", true); return false; }
 
@@ -665,14 +665,11 @@
         if (data.models) this.fillModels(data.models, data.ok ? data.model : data.recommended);
 
         if (data.ok) {
-          this.showResult("接続できました。モデルは " + data.model + " を使います。", false);
+          // 指定したモデルが使えず、サーバー側で切り替わったときは理由を伝える
+          this.showResult(data.switched
+            ? data.requested + " は使えなかったので、" + data.model + " に切り替えました。"
+            : "接続できました。モデルは " + data.model + " を使います。", false);
           return true;
-        }
-        // 選んでいたモデルが使えなかった場合は、使えるものへ切り替えて一度だけやり直す
-        if (!retried && data.recommended) {
-          button.textContent = "接続テスト";
-          button.disabled = false;
-          return await this.testKey(true);
         }
         this.showResult(data.error, true);
         return false;

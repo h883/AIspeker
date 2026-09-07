@@ -149,9 +149,11 @@ class ModelListingTest(unittest.TestCase):
 
     LISTING = {
         "models": [
-            {"name": "models/gemini-2.5-pro", "displayName": "Pro",
+            {"name": "models/gemini-2.5-flash", "displayName": "Flash 2.5",
              "supportedGenerationMethods": ["generateContent"]},
-            {"name": "models/gemini-2.5-flash", "displayName": "Flash",
+            {"name": "models/gemini-3.6-pro", "displayName": "Pro 3.6",
+             "supportedGenerationMethods": ["generateContent"]},
+            {"name": "models/gemini-3.6-flash", "displayName": "Flash 3.6",
              "supportedGenerationMethods": ["generateContent"]},
             {"name": "models/text-embedding-004",
              "supportedGenerationMethods": ["embedContent"]},
@@ -169,37 +171,66 @@ class ModelListingTest(unittest.TestCase):
         with mock.patch.object(gemini.httpx, "get", return_value=self._ok(self.LISTING)):
             result = gemini.list_models("some-key")
         names = [item["name"] for item in result["models"]]
-        self.assertEqual(names, ["gemini-2.5-flash", "gemini-2.5-pro"])
-        self.assertEqual(result["recommended"], "gemini-2.5-flash")
+        self.assertEqual(names, ["gemini-3.6-flash", "gemini-3.6-pro", "gemini-2.5-flash"])
+        self.assertEqual(result["recommended"], "gemini-3.6-flash")
 
-    def test_unusable_model_is_reported_with_alternatives(self) -> None:
-        """使えないモデルを選んだときは、代わりに使えるものを返す。"""
-        listing = {"models": [self.LISTING["models"][1]]}   # flash のみ
-        with mock.patch.object(gemini.httpx, "get", return_value=self._ok(listing)):
-            result = gemini.verify_key("some-key", "gemini-2.5-pro")
+    def test_newer_versions_rank_first(self) -> None:
+        """古いモデルは新規ユーザーに提供終了することがあるので、新しい順に試す。"""
+        names = ["gemini-2.5-flash", "gemini-3.6-pro", "gemini-3.6-flash",
+                 "gemini-3.6-flash-preview", "gemini-2.0-flash"]
+        self.assertEqual(
+            sorted(names, key=gemini._model_rank),
+            ["gemini-3.6-flash", "gemini-3.6-pro", "gemini-2.5-flash",
+             "gemini-2.0-flash", "gemini-3.6-flash-preview"],
+        )
 
-        self.assertFalse(result["ok"])
-        self.assertIn("gemini-2.5-pro を使えません", result["error"])
-        self.assertEqual(result["recommended"], "gemini-2.5-flash")
-        self.assertEqual([m["name"] for m in result["models"]], ["gemini-2.5-flash"])
+    def test_retired_model_falls_through_to_the_next(self) -> None:
+        """一覧には出るが応答しないモデルは飛ばして、次の候補を採用する。"""
+        retired = mock.Mock()
+        retired.status_code = 404
+        retired.json.return_value = {"error": {"message":
+            "This model models/gemini-2.5-flash is no longer available to new users."}}
+        working = mock.Mock()
+        working.status_code = 200
+
+        with mock.patch.object(gemini.httpx, "get", return_value=self._ok(self.LISTING)), \
+             mock.patch.object(gemini.httpx, "post", side_effect=[retired, working]):
+            result = gemini.verify_key("some-key", "gemini-2.5-flash")
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["switched"])
+        self.assertEqual(result["requested"], "gemini-2.5-flash")
+        self.assertEqual(result["model"], "gemini-3.6-flash")
 
     def test_bad_key_is_reported_before_choosing_a_model(self) -> None:
         denied = mock.Mock()
         denied.status_code = 403
         denied.json.return_value = {"error": {"message": "API key not valid"}}
         with mock.patch.object(gemini.httpx, "get", return_value=denied):
-            result = gemini.verify_key("bad-key", "gemini-2.5-flash")
+            result = gemini.verify_key("bad-key", "gemini-3.6-flash")
         self.assertFalse(result["ok"])
         self.assertIn("APIキー", result["error"])
+
+    def test_rate_limit_does_not_burn_through_every_model(self) -> None:
+        limited = mock.Mock()
+        limited.status_code = 429
+        limited.json.return_value = {"error": {"message": "quota"}}
+        with mock.patch.object(gemini.httpx, "get", return_value=self._ok(self.LISTING)), \
+             mock.patch.object(gemini.httpx, "post", return_value=limited) as post:
+            result = gemini.verify_key("some-key", "gemini-3.6-flash")
+        self.assertFalse(result["ok"])
+        self.assertIn("利用制限", result["error"])
+        self.assertEqual(post.call_count, 1)
 
     def test_usable_model_passes(self) -> None:
         generate = mock.Mock()
         generate.status_code = 200
         with mock.patch.object(gemini.httpx, "get", return_value=self._ok(self.LISTING)), \
              mock.patch.object(gemini.httpx, "post", return_value=generate):
-            result = gemini.verify_key("some-key", "gemini-2.5-flash")
+            result = gemini.verify_key("some-key", "gemini-3.6-flash")
         self.assertTrue(result["ok"])
-        self.assertEqual(result["model"], "gemini-2.5-flash")
+        self.assertEqual(result["model"], "gemini-3.6-flash")
+        self.assertFalse(result["switched"])
 
 
 class AssetVersionTest(unittest.TestCase):

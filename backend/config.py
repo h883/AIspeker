@@ -86,7 +86,7 @@ def _apply() -> None:
 
         # --- Gemini ---
         GEMINI_API_KEY=_env("GEMINI_API_KEY"),
-        GEMINI_MODEL=_env("GEMINI_MODEL", "gemini-2.5-flash"),
+        GEMINI_MODEL=_env("GEMINI_MODEL", "gemini-3.6-flash"),
         GEMINI_ENDPOINT=_env(
             "GEMINI_ENDPOINT", "https://generativelanguage.googleapis.com/v1beta"
         ),

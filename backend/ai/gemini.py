@@ -6,6 +6,7 @@ APIキーはこのプロセス内だけで扱い、フロントには渡さな�
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import httpx
@@ -43,18 +44,37 @@ def _is_chat_model(item: dict[str, Any]) -> bool:
     return "generateContent" in (item.get("supportedGenerationMethods") or [])
 
 
-def _model_rank(name: str) -> tuple[int, str]:
-    """使いやすい順に並べる。応答が速い flash を優先する。"""
+_VERSION_RE = re.compile(r"(\d+)\.(\d+)")
+
+# 名前に含まれていたら「試験的なので後回し」と判断する語
+_UNSTABLE_HINTS = ("preview", "experimental", "-exp", "latest")
+
+
+def _model_version(name: str) -> float:
+    """モデル名からバージョンを取り出す。gemini-3.6-flash なら 3.6。"""
+    match = _VERSION_RE.search(name)
+    if not match:
+        return 0.0
+    return int(match.group(1)) + int(match.group(2)) / 100
+
+
+def _model_rank(name: str) -> tuple[int, float, int, str]:
+    """おすすめ順に並べる。
+
+    Gemini は古いモデルを新規ユーザーに提供しなくなることがあるため、
+    まず新しいバージョンを優先する。同じバージョンなら応答の速い flash を選ぶ。
+    """
+    unstable = 1 if any(hint in name for hint in _UNSTABLE_HINTS) else 0
     if "flash-lite" in name:
-        order = 1
+        family = 1
     elif "flash" in name:
-        order = 0
+        family = 0
     elif "pro" in name:
-        order = 2
+        family = 2
     else:
-        order = 3
-    # 同じ系統なら新しいバージョンが先に来るよう、名前の降順を添える
-    return (order, name)
+        family = 3
+    # バージョンは新しい順にしたいので符号を反転させる
+    return (unstable, -_model_version(name), family, name)
 
 
 def list_models(api_key: str = "") -> dict[str, Any]:
@@ -110,37 +130,12 @@ def list_models(api_key: str = "") -> dict[str, Any]:
     return {"ok": True, "models": models, "recommended": models[0]["name"]}
 
 
-def verify_key(api_key: str = "", model: str = "") -> dict[str, Any]:
-    """セットアップ画面の接続テスト用。
+def _probe_model(key: str, model: str) -> dict[str, Any]:
+    """そのモデルで実際に応答が返るかを1往復だけ試す。
 
-    まずモデル一覧でキーの有効性を確かめ、そのうえで
-    選ばれたモデルが実際に応答するかを見る。保存前に確認できるよう
-    キーを引数で受け取る。
+    fatal=True は「モデルを変えても解決しない」という意味。
     """
-    key = (api_key or config.GEMINI_API_KEY).strip()
-    if not key:
-        return {"ok": False, "error": "APIキーが入力されていません。"}
-
-    listing = list_models(key)
-    if not listing["ok"]:
-        return listing
-
-    available = [item["name"] for item in listing["models"]]
-    target_model = (model or config.GEMINI_MODEL).strip()
-
-    # 選ばれたモデルが使えない場合は、使えるものを提案して選び直させる
-    if target_model not in available:
-        return {
-            "ok": False,
-            "models": listing["models"],
-            "recommended": listing["recommended"],
-            "error": (
-                f"このキーでは {target_model} を使えません。"
-                f"「{listing['recommended']}」など、使えるモデルに切り替えてください。"
-            ),
-        }
-
-    url = f"{config.GEMINI_ENDPOINT}/models/{target_model}:generateContent"
+    url = f"{config.GEMINI_ENDPOINT}/models/{model}:generateContent"
     payload = {
         "contents": [{"role": "user", "parts": [{"text": "ping"}]}],
         "generationConfig": {"maxOutputTokens": 8},
@@ -153,23 +148,67 @@ def verify_key(api_key: str = "", model: str = "") -> dict[str, Any]:
             timeout=20,
         )
     except httpx.HTTPError:
-        return {"ok": False, "error": "Gemini に接続できませんでした。ネットワークを確認してください。"}
+        return {"ok": False, "fatal": True,
+                "error": "Gemini に接続できませんでした。ネットワークを確認してください。"}
 
     if response.status_code == 200:
-        return {
-            "ok": True,
-            "model": target_model,
-            "models": listing["models"],
-            "recommended": listing["recommended"],
-            "message": "接続できました。",
-        }
+        return {"ok": True}
 
     message = _error_message(response)
     if response.status_code == 429:
-        return {"ok": False, "models": listing["models"],
+        return {"ok": False, "fatal": True,
                 "error": "利用制限に達しています。しばらく待ってから試してください。"}
-    return {"ok": False, "models": listing["models"],
-            "error": f"{target_model} で応答を得られませんでした（{message}）。"}
+    if response.status_code in (401, 403) and "model" not in message.lower():
+        return {"ok": False, "fatal": True, "error": f"APIキーが正しくないようです（{message}）。"}
+    # モデル固有の問題（提供終了・権限なしなど）は、次の候補を試す価値がある
+    return {"ok": False, "fatal": False, "error": message}
+
+
+def verify_key(api_key: str = "", model: str = "") -> dict[str, Any]:
+    """セットアップ画面の接続テスト用。
+
+    まずモデル一覧でキーの有効性を確かめ、次に実際に応答するモデルを探す。
+    一覧に載っていても新規ユーザーには提供終了、という場合があるため、
+    候補を順に試して最初に通ったものを採用する。
+    """
+    key = (api_key or config.GEMINI_API_KEY).strip()
+    if not key:
+        return {"ok": False, "error": "APIキーが入力されていません。"}
+
+    listing = list_models(key)
+    if not listing["ok"]:
+        return listing
+
+    available = [item["name"] for item in listing["models"]]
+    requested = (model or config.GEMINI_MODEL).strip()
+
+    # 指定されたモデルを最優先に、あとはおすすめ順で試す
+    candidates = [requested] if requested in available else []
+    candidates += [name for name in available if name not in candidates]
+
+    failures: list[str] = []
+    for candidate in candidates[:5]:
+        result = _probe_model(key, candidate)
+        if result["ok"]:
+            return {
+                "ok": True,
+                "model": candidate,
+                "models": listing["models"],
+                "recommended": candidate,
+                "switched": bool(requested and candidate != requested),
+                "requested": requested,
+                "message": "接続できました。",
+            }
+        if result.get("fatal"):
+            return {"ok": False, "models": listing["models"], "error": result["error"]}
+        failures.append(f"{candidate}: {result['error']}")
+
+    return {
+        "ok": False,
+        "models": listing["models"],
+        "recommended": listing["recommended"],
+        "error": "使えるモデルが見つかりませんでした。" + (failures[0] if failures else ""),
+    }
 
 
 def _tools_payload() -> list[dict[str, Any]]:
