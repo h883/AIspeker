@@ -402,6 +402,27 @@ class GeminiLoopTest(unittest.TestCase):
         self.assertIn("混み合っています", str(ctx.exception))
         self.assertEqual(post.call_count, 3)   # 初回 + 再試行2回
 
+    def test_retrying_stops_at_the_time_budget(self) -> None:
+        """混雑時は1回の応答も遅いので、回数ではなく時間で打ち切る。"""
+        busy = mock.Mock()
+        busy.status_code = 503
+        busy.json.return_value = {"error": {"message": "high demand"}}
+
+        clock = [0.0]
+        with mock.patch.object(gemini.httpx, "post", return_value=busy) as post, \
+             mock.patch.object(gemini.time, "sleep"), \
+             mock.patch.object(gemini.time, "monotonic", side_effect=lambda: clock[0]), \
+             mock.patch.object(gemini.config, "RETRY_BUDGET_SECONDS", 45):
+            # 1回目の応答に予算いっぱいかかった状況を作る
+            def slow(*args, **kwargs):
+                clock[0] += 50
+                return busy
+            post.side_effect = slow
+            with self.assertRaises(gemini.GeminiError):
+                gemini.ask("こんにちは")
+
+        self.assertEqual(post.call_count, 1)   # 予算超過で再試行しない
+
     def test_permanent_error_is_not_retried(self) -> None:
         denied = mock.Mock()
         denied.status_code = 403

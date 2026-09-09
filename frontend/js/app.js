@@ -410,7 +410,7 @@
       (data.precipitation_probability != null ? data.precipitation_probability + "%" : "—");
     container.appendChild(head);
 
-    data.hourly.filter((_, i) => i % 3 === 0).forEach(hour => {
+    data.hourly.forEach(hour => {
       const item = document.createElement("div");
       item.className = "item";
       item.innerHTML = '<div><p class="item-title"></p><p class="item-sub"></p></div><span class="item-time"></span>';

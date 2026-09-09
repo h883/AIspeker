@@ -266,14 +266,25 @@ def _request(payload: dict[str, Any]) -> dict[str, Any]:
         "Content-Type": "application/json",
     }
 
+    # 話しかけて何分も黙られる方が困るので、再試行にかける時間の上限を決める。
+    # 混雑時は1回の応答自体が遅いため、回数だけでは歯止めにならない。
+    started = time.monotonic()
     last_error: GeminiError | None = None
+
     for attempt in range(len(_RETRY_DELAYS) + 1):
         if attempt:
+            if time.monotonic() - started >= config.RETRY_BUDGET_SECONDS:
+                logger.info("再試行の時間上限に達したので打ち切ります")
+                break
             time.sleep(_RETRY_DELAYS[attempt - 1])
             logger.info("Gemini へ再試行します（%d回目）", attempt + 1)
 
+        # 残り時間を超えて待たないようにする
+        remaining = config.RETRY_BUDGET_SECONDS - (time.monotonic() - started)
+        timeout = config.GEMINI_TIMEOUT if attempt == 0 else max(10.0, remaining)
+
         try:
-            response = httpx.post(url, json=payload, headers=headers, timeout=config.GEMINI_TIMEOUT)
+            response = httpx.post(url, json=payload, headers=headers, timeout=timeout)
         except httpx.HTTPError as exc:
             last_error = GeminiError("現在AIサービスに接続できません。")
             last_error.__cause__ = exc

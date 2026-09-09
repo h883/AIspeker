@@ -91,6 +91,9 @@ def _apply() -> None:
             "GEMINI_ENDPOINT", "https://generativelanguage.googleapis.com/v1beta"
         ),
         GEMINI_TIMEOUT=_env_int("GEMINI_TIMEOUT", 60),
+        # 混雑時に再試行へ費やしてよい合計秒数。
+        # 音声で話しかけて何分も黙られるのを防ぐための上限。
+        RETRY_BUDGET_SECONDS=_env_int("RETRY_BUDGET_SECONDS", 45),
         # Tool Calling を何往復まで許すか（無限ループ防止）
         MAX_TOOL_ROUNDS=_env_int("MAX_TOOL_ROUNDS", 6),
 

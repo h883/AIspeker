@@ -16,6 +16,9 @@ from backend.tools.time import resolve_date
 GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 
+# 時間別予報を何時間おきに返すか（画面表示も Gemini へ渡す量もこれで決まる）
+HOURLY_STEP = 3
+
 # Open-Meteo の WMO weather code -> 日本語
 WMO_JA = {
     0: "快晴", 1: "晴れ", 2: "晴れときどき曇り", 3: "曇り",
@@ -139,9 +142,13 @@ def get_weather(location: str | None = None, date: str | None = None) -> dict[st
 
     code = (daily.get("weather_code") or [None])[0]
     precip_prob = (daily.get("precipitation_probability_max") or [None])[0]
+    # 3時間おきに間引く。24件そのままでは Gemini へ渡す量が無駄に増え、
+    # 応答が遅くなり無料枠も早く消費する。画面も3時間おきにしか表示しない。
     hourly = payload.get("hourly") or {}
     hourly_rows = []
     for idx, stamp in enumerate(hourly.get("time") or []):
+        if idx % HOURLY_STEP:
+            continue
         hourly_rows.append({
             "time": stamp[11:16],
             "weather": WMO_JA.get((hourly.get("weather_code") or [None] * (idx + 1))[idx], "不明"),
