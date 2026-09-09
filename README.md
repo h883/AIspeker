@@ -163,13 +163,26 @@ python scripts/google_auth.py
 
 ---
 
-## Raspberry Pi で自動起動する
+## Raspberry Pi へ移す
+
+Raspberry Pi に SSH で入って、3行です。
 
 ```bash
+git clone https://github.com/h883/AIspeker.git
+cd AIspeker
 sudo ./scripts/install_service.sh
 ```
 
-systemd に登録され、電源投入時に自動で立ち上がります。
+依存関係の導入と systemd への登録まで行われ、電源投入時に自動起動します。
+`python3-venv` などが足りない場合は、入れ方を表示して止まります。
+
+更新するときは `git pull` してからサービスを再起動します。
+
+```bash
+git pull && sudo systemctl restart student-ai-assistant
+```
+
+### 自動起動の管理
 
 ```bash
 systemctl status student-ai-assistant     # 状態
@@ -177,7 +190,7 @@ journalctl -u student-ai-assistant -f     # ログ
 sudo systemctl restart student-ai-assistant
 ```
 
-スマートフォンからは `http://raspberrypi.local:8000` でアクセスできます。
+スマートフォンからは `http://<Piのホスト名>.local:8000` でアクセスできます。
 Chrome のメニューから「ホーム画面に追加」を選ぶと、通常のアプリのように起動できます（PWA）。
 
 ---
