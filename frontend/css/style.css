@@ -1,15 +1,24 @@
 :root {
-  --bg: #0b1020;
-  --bg-soft: #151b31;
-  --card: #1b2240;
-  --line: #2a3357;
-  --text: #eef1fb;
-  --muted: #98a1c4;
-  --accent: #5b8cff;
-  --accent-soft: rgba(91, 140, 255, 0.18);
-  --ok: #4fd6a0;
-  --warn: #ffb457;
-  --err: #ff6b81;
+  /* 白基調。面はほぼ白、輪郭は淡い線で分ける。
+     強調は青ではなく濃いグレーで行い、色は状態を示すときだけ使う。 */
+  --bg: #f7f8fa;
+  --bg-soft: #ffffff;
+  --card: #ffffff;
+  --line: #e0e3e8;
+  --text: #14161a;
+  --muted: #626973;
+  --accent: #2b2f36;
+  --accent-soft: rgba(43, 47, 54, 0.10);
+  --ok: #1b7a4b;
+  --warn: #8a5a10;
+  --err: #b3261e;
+  /* 淡い面の上でも読める、状態を示す背景と文字 */
+  --err-bg: #fdf2f1;
+  --err-line: #f0c8c5;
+  --err-text: #8c1d18;
+  --ok-bg: #eff8f3;
+  --ok-line: #c3e2d1;
+  --ok-text: #14532d;
   --radius: 18px;
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
@@ -62,8 +71,8 @@ html, body {
   width: 132px; height: 132px;
   border-radius: 50%;
   border: none;
-  background: radial-gradient(circle at 35% 30%, #6f9cff, #2f4bb5 60%, #1b2a63);
-  box-shadow: 0 0 0 0 var(--accent-soft), 0 16px 40px rgba(0, 0, 0, .45);
+  background: radial-gradient(circle at 35% 30%, #7d848f, #444a54 58%, #262a31);
+  box-shadow: 0 0 0 0 var(--accent-soft), 0 14px 30px rgba(20, 22, 26, .18);
   position: relative;
   cursor: pointer;
   transition: transform .18s ease;
@@ -72,18 +81,18 @@ html, body {
 .orb-core {
   position: absolute; inset: 26%;
   border-radius: 50%;
-  background: rgba(255, 255, 255, .16);
+  background: rgba(255, 255, 255, .18);
 }
 
 .orb.is-listening { animation: pulse 1.25s ease-out infinite; }
 .orb.is-thinking { animation: spin 2.4s linear infinite; }
-.orb.is-fetching { animation: pulse 1.9s ease-out infinite; background: radial-gradient(circle at 35% 30%, #ffd08a, #d98a2b 60%, #7a4a12); }
-.orb.is-error { background: radial-gradient(circle at 35% 30%, #ff9aa8, #c93a52 60%, #6d1b2a); }
+.orb.is-fetching { animation: pulse 1.9s ease-out infinite; background: radial-gradient(circle at 35% 30%, #f0b862, #c07d18 58%, #8a5a10); }
+.orb.is-error { background: radial-gradient(circle at 35% 30%, #f0a0a4, #c33a35 58%, #8c1d18); }
 
 @keyframes pulse {
-  0%   { box-shadow: 0 0 0 0 var(--accent-soft), 0 16px 40px rgba(0,0,0,.45); }
-  70%  { box-shadow: 0 0 0 26px rgba(91,140,255,0), 0 16px 40px rgba(0,0,0,.45); }
-  100% { box-shadow: 0 0 0 0 rgba(91,140,255,0), 0 16px 40px rgba(0,0,0,.45); }
+  0%   { box-shadow: 0 0 0 0 var(--accent-soft), 0 14px 30px rgba(20,22,26,.18); }
+  70%  { box-shadow: 0 0 0 26px rgba(43,47,54,0), 0 14px 30px rgba(20,22,26,.18); }
+  100% { box-shadow: 0 0 0 0 rgba(43,47,54,0), 0 14px 30px rgba(20,22,26,.18); }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -93,8 +102,8 @@ html, body {
 /* 待受中はオーブがゆっくり呼吸する */
 .orb.is-standby { animation: breathe 3.4s ease-in-out infinite; }
 @keyframes breathe {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(79, 214, 160, .28), 0 16px 40px rgba(0,0,0,.45); }
-  50%      { box-shadow: 0 0 0 16px rgba(79, 214, 160, 0), 0 16px 40px rgba(0,0,0,.45); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(27, 122, 75, .24), 0 14px 30px rgba(20,22,26,.18); }
+  50%      { box-shadow: 0 0 0 16px rgba(27, 122, 75, 0), 0 14px 30px rgba(20,22,26,.18); }
 }
 
 .wake-toggle {
@@ -109,7 +118,7 @@ html, body {
   align-items: center;
   gap: 7px;
 }
-.wake-toggle[aria-pressed="true"] { color: var(--ok); border-color: rgba(79, 214, 160, .45); }
+.wake-toggle[aria-pressed="true"] { color: var(--ok); border-color: rgba(27, 122, 75, .45); }
 
 .wake-dot {
   width: 7px; height: 7px;
@@ -169,13 +178,15 @@ html, body {
 .item-title { font-size: 15px; font-weight: 600; margin: 0 0 3px; }
 .item-sub { font-size: 13px; color: var(--muted); margin: 0; }
 /* 分類・期限のような、内容より一段弱い付帯情報 */
-.item-meta { font-size: 11px; color: var(--muted); opacity: .75; margin: 3px 0 0; }
+.item-meta { font-size: 11px; color: var(--muted); margin: 3px 0 0; }
+/* 時刻ではなく分類を出すとき（記憶の出どころなど）は、見出しより控えめにする */
+.item-time.item-tag { font-size: 11px; color: var(--muted); font-weight: 500; }
 .item-time { font-variant-numeric: tabular-nums; color: var(--accent); font-size: 14px; white-space: nowrap; }
 .empty { color: var(--muted); font-size: 14px; padding: 10px 2px; }
 .error-box {
-  border: 1px solid rgba(255, 107, 129, .4);
-  background: rgba(255, 107, 129, .1);
-  color: #ffc7cf;
+  border: 1px solid var(--err-line);
+  background: var(--err-bg);
+  color: var(--err-text);
   border-radius: 14px;
   padding: 12px 14px;
   font-size: 14px;
@@ -194,7 +205,7 @@ html, body {
 }
 .bubble.user { margin-left: auto; background: var(--accent); color: #fff; border-bottom-right-radius: 5px; }
 .bubble.ai { margin-right: auto; background: var(--card); border: 1px solid var(--line); border-bottom-left-radius: 5px; }
-.bubble.err { margin-right: auto; background: rgba(255,107,129,.12); border: 1px solid rgba(255,107,129,.4); color: #ffc7cf; }
+.bubble.err { margin-right: auto; background: var(--err-bg); border: 1px solid var(--err-line); color: var(--err-text); }
 
 .chat-form {
   position: sticky;
@@ -346,14 +357,14 @@ body.is-setup .view { padding-bottom: 32px; }
   border-radius: 12px;
   padding: 11px 14px;
   margin: 10px 0 0;
-  border: 1px solid rgba(79, 214, 160, .4);
-  background: rgba(79, 214, 160, .1);
-  color: #b6f0d8;
+  border: 1px solid var(--ok-line);
+  background: var(--ok-bg);
+  color: var(--ok-text);
 }
 .setup-result.is-error {
-  border-color: rgba(255, 107, 129, .4);
-  background: rgba(255, 107, 129, .1);
-  color: #ffc7cf;
+  border-color: var(--err-line);
+  background: var(--err-bg);
+  color: var(--err-text);
 }
 
 .setup-actions {
@@ -386,7 +397,7 @@ code {
   position: fixed;
   left: 0; right: 0; bottom: 0;
   display: flex;
-  background: rgba(11, 16, 32, .94);
+  background: rgba(255, 255, 255, .94);
   backdrop-filter: blur(12px);
   border-top: 1px solid var(--line);
   padding-bottom: var(--safe-bottom);
@@ -400,7 +411,7 @@ code {
   font-size: 11px;
   border-radius: 0;
 }
-.tabbar button.is-active { color: var(--accent); }
+.tabbar button.is-active { color: var(--accent); font-weight: 600; }
 
 /* ---------- トースト ---------- */
 .toast {

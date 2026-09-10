@@ -12,10 +12,11 @@ from pathlib import Path
 
 ASSETS = Path(__file__).resolve().parent.parent / "frontend" / "assets"
 
-BG_TOP = (27, 42, 99)
-BG_BOTTOM = (11, 16, 32)
-ORB_LIGHT = (111, 156, 255)
-ORB_DARK = (47, 75, 181)
+# 画面と同じ配色（白地にグラファイトのオーブ）
+BG_TOP = (255, 255, 255)
+BG_BOTTOM = (240, 242, 245)
+ORB_LIGHT = (125, 132, 143)
+ORB_DARK = (56, 61, 70)
 
 
 def _blend(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:

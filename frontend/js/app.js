@@ -408,7 +408,9 @@
       item.querySelector(".item-meta").textContent =
         [memory.category_label, memory.expires_at ? "期限 " + memory.expires_at : ""]
           .filter(Boolean).join(" · ");
-      item.querySelector(".item-time").textContent = memory.source === "manual" ? "手入力" : "AI";
+      const badge = item.querySelector(".item-time");
+      badge.classList.add("item-tag");
+      badge.textContent = memory.source === "manual" ? "手入力" : "AI";
 
       const del = document.createElement("button");
       del.className = "tiny";
