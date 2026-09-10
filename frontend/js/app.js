@@ -335,6 +335,93 @@
       }
       container.appendChild(item);
     });
+
+    loadTimetable();
+  }
+
+  /* ================= 時間割 ================= */
+
+  async function loadTimetable() {
+    const container = $("#timetable-list");
+    container.innerHTML = "";
+    let data;
+    try {
+      data = await API.timetable();
+    } catch (err) {
+      container.appendChild(errorBox(err.message));
+      return;
+    }
+    if (!data.lessons.length) {
+      container.innerHTML = '<p class="empty">まだ登録されていません。下から追加できます。</p>';
+      return;
+    }
+
+    data.lessons.forEach(lesson => {
+      const item = document.createElement("div");
+      item.className = "item";
+      item.innerHTML =
+        '<div><p class="item-title"></p><p class="item-sub"></p></div><span class="item-time"></span>';
+      item.querySelector(".item-title").textContent =
+        data.weekdays[lesson.weekday] + " " + lesson.period + "限 " + lesson.subject;
+      item.querySelector(".item-sub").textContent =
+        [lesson.teacher, lesson.room].filter(Boolean).join(" · ");
+      item.querySelector(".item-time").textContent = lesson.start_time;
+
+      const del = document.createElement("button");
+      del.className = "tiny";
+      del.textContent = "削除";
+      del.onclick = async () => {
+        try { await API.deleteLesson(lesson.id); } catch (err) { showToast(err.message); return; }
+        loadCalendar();
+      };
+      item.appendChild(del);
+      container.appendChild(item);
+    });
+  }
+
+  /* ================= 記憶 ================= */
+
+  async function loadMemory() {
+    const container = $("#memory-list");
+    container.innerHTML = "";
+    let data;
+    try {
+      data = await API.memories();
+    } catch (err) {
+      container.appendChild(errorBox(err.message));
+      return;
+    }
+    if (!data.memories.length) {
+      container.innerHTML = '<p class="empty">まだ何も覚えていません。</p>';
+      return;
+    }
+
+    data.memories.forEach(memory => {
+      const item = document.createElement("div");
+      item.className = "item";
+      item.innerHTML =
+        '<div><p class="item-title"></p><p class="item-sub"></p><p class="item-meta"></p></div>' +
+        '<span class="item-time"></span>';
+      // 項目名と内容を上下に分ける。1行に詰めると長いものが折り返して読みにくい。
+      item.querySelector(".item-title").textContent = memory.key;
+      item.querySelector(".item-sub").textContent = memory.value;
+      item.querySelector(".item-meta").textContent =
+        [memory.category_label, memory.expires_at ? "期限 " + memory.expires_at : ""]
+          .filter(Boolean).join(" · ");
+      const badge = item.querySelector(".item-time");
+      badge.classList.add("item-tag");
+      badge.textContent = memory.source === "manual" ? "手入力" : "AI";
+
+      const del = document.createElement("button");
+      del.className = "tiny";
+      del.textContent = "削除";
+      del.onclick = async () => {
+        try { await API.deleteMemory(memory.id); } catch (err) { showToast(err.message); return; }
+        loadMemory();
+      };
+      item.appendChild(del);
+      container.appendChild(item);
+    });
   }
 
   function errorBox(message) {
@@ -518,6 +605,22 @@
       if (field.type === "checkbox") field.checked = Boolean(value);
       else field.value = value;
     });
+
+    // 未連携のまま「Google カレンダー」を選べると、選んでも黙ってローカルで
+    // 動くため、連携できたと誤解させる。連携するまでは選べないようにする。
+    const sourceField = document.querySelector('[name="calendar_source"]');
+    const googleOption = sourceField && sourceField.querySelector('option[value="google"]');
+    if (googleOption) {
+      googleOption.disabled = !status.google_calendar;
+      googleOption.textContent = status.google_calendar
+        ? "Google カレンダー"
+        : "Google カレンダー（未連携）";
+      $("#calendar-source-note").textContent = status.google_calendar
+        ? ""
+        : "Google カレンダーを使うには、下の「セットアップをやり直す」から連携してください。";
+    }
+
+    loadMemory();
   }
 
   async function saveSettings(event) {
@@ -568,8 +671,10 @@
           ? "登録済み（変更するときだけ入力）" : "AIza... から始まる文字列";
         $("#setup-maps-key").placeholder = data.maps_configured
           ? "登録済み（変更するときだけ入力）" : "未設定のままでもOK";
-        $("#setup-calendar-state").textContent = data.google_calendar_connected
-          ? "現在: 連携済み" : "現在: 未連携";
+        this.renderGoogle({
+          connected: data.google_calendar_connected,
+          client_secret_saved: data.google_client_secret_saved
+        });
         this.fillFromSettings();
 
         // 登録済みのキーがあるなら、その場で使えるモデルを出しておく
@@ -732,7 +837,105 @@
       }
     },
 
+    /* --- Google カレンダー連携（この画面だけで完了させる） --- */
+
+    showGoogle: function (message, isError) {
+      const box = $("#google-result");
+      box.textContent = message;
+      box.classList.toggle("is-error", Boolean(isError));
+      box.hidden = !message;
+    },
+
+    /** 連携済みかどうかで表示を切り替える。 */
+    renderGoogle: function (data) {
+      const connected = Boolean(data && data.connected);
+      $("#google-connected-block").hidden = !connected;
+      $("#google-setup-block").hidden = connected;
+      $("#setup-calendar-state").textContent = connected ? "現在: 連携済み" : "現在: 未連携";
+      if (!connected) {
+        $("#google-secret-state").textContent = data && data.client_secret_saved
+          ? "クライアントの JSON は登録済みです。"
+          : "まだ登録されていません。";
+      }
+    },
+
+    refreshGoogle: async function () {
+      try {
+        this.renderGoogle(await API.googleState());
+      } catch (err) {
+        /* 状態が取れなくても他の入力は続けられる */
+      }
+    },
+
+    uploadGoogleSecret: async function (file) {
+      if (!file) return;
+      this.showGoogle("読み込んでいます…", false);
+      try {
+        const data = await API.googleUpload(file);
+        if (!data.ok) { this.showGoogle(data.error, true); return; }
+        this.renderGoogle(data);
+        this.showGoogle("クライアントの JSON を登録しました。「認証をはじめる」を押してください。", false);
+      } catch (err) {
+        this.showGoogle(err.message, true);
+      }
+    },
+
+    startGoogle: async function () {
+      const button = $("#google-start");
+      button.disabled = true;
+      try {
+        const data = await API.googleStart();
+        if (!data.ok) { this.showGoogle(data.error, true); return; }
+        $("#google-auth-link").href = data.auth_url;
+        $("#google-step2").hidden = false;
+        this.showGoogle("", false);
+      } catch (err) {
+        this.showGoogle(err.message, true);
+      } finally {
+        button.disabled = false;
+      }
+    },
+
+    finishGoogle: async function () {
+      const value = $("#google-redirected").value.trim();
+      if (!value) { this.showGoogle("許可のあとに表示された URL を貼り付けてください。", true); return; }
+
+      const button = $("#google-finish");
+      button.disabled = true;
+      try {
+        const data = await API.googleFinish(value);
+        if (!data.ok) { this.showGoogle(data.error, true); return; }
+        $("#google-redirected").value = "";
+        $("#google-step2").hidden = true;
+        this.renderGoogle(data);
+        this.showGoogle(data.message, false);
+        state.settings.calendar_source = "google";
+      } catch (err) {
+        this.showGoogle(err.message, true);
+      } finally {
+        button.disabled = false;
+      }
+    },
+
+    disconnectGoogle: async function () {
+      if (!window.confirm("Google カレンダーとの連携を解除します。よろしいですか？")) return;
+      try {
+        const data = await API.googleDisconnect();
+        this.renderGoogle(data);
+        this.showGoogle(data.message, false);
+        state.settings.calendar_source = "local";
+      } catch (err) {
+        this.showGoogle(err.message, true);
+      }
+    },
+
     bind: function () {
+      $("#google-secret-file").onchange = (event) =>
+        this.uploadGoogleSecret(event.target.files && event.target.files[0]);
+      $("#google-start").onclick = () => this.startGoogle();
+      $("#google-finish").onclick = () => this.finishGoogle();
+      $("#google-disconnect").onclick = () => this.disconnectGoogle();
+
       $("#setup-show-key").onchange = (event) => {
         $("#setup-gemini-key").type = event.target.checked ? "text" : "password";
       };
@@ -863,6 +1066,48 @@
       } catch (err) { showToast(err.message); }
     };
 
+    $("#lesson-form").onsubmit = async (event) => {
+      event.preventDefault();
+      try {
+        const data = await API.addLesson({
+          weekday: Number($("#lesson-weekday").value),
+          period: Number($("#lesson-period").value),
+          subject: $("#lesson-subject").value.trim(),
+          teacher: $("#lesson-teacher").value.trim(),
+          room: $("#lesson-room").value.trim()
+        });
+        if (!data.ok) { showToast(data.error); return; }
+        $("#lesson-subject").value = "";
+        $("#lesson-teacher").value = "";
+        $("#lesson-room").value = "";
+        loadCalendar();
+        showToast(data.weekday_label + "曜 " + data.period + "限に登録しました");
+      } catch (err) { showToast(err.message); }
+    };
+
+    $("#memory-form").onsubmit = async (event) => {
+      event.preventDefault();
+      try {
+        const data = await API.addMemory({
+          key: $("#memory-key").value.trim(),
+          value: $("#memory-value").value.trim(),
+          category: $("#memory-category").value,
+          expires: $("#memory-expires").value
+        });
+        if (!data.ok) { showToast(data.error); return; }
+        $("#memory-form").reset();
+        loadMemory();
+        showToast("覚えました");
+      } catch (err) { showToast(err.message); }
+    };
+
+    $("#memory-clear").onclick = async () => {
+      if (!window.confirm("覚えていることを全部消します。よろしいですか？")) return;
+      try { await API.clearMemory(); } catch (err) { showToast(err.message); return; }
+      loadMemory();
+      showToast("覚えていることを消しました");
+    };
+
     $("#history-clear").onclick = async () => {
       await API.clearHistory();
       state.history = [];
@@ -894,8 +1139,10 @@
       const data = await API.setupState();
       state.settings = data.settings;
       needsSetup = data.needs_setup;
-      $("#setup-calendar-state").textContent = data.google_calendar_connected
-        ? "現在: 連携済み" : "現在: 未連携";
+      setup.renderGoogle({
+        connected: data.google_calendar_connected,
+        client_secret_saved: data.google_client_secret_saved
+      });
     } catch (err) {
       showToast(err.message);
     }

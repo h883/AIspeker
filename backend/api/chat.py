@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from backend.ai import gemini
 from backend.database import db
+from backend.tools import memory as memory_tool
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -29,7 +30,11 @@ class ChatResponse(BaseModel):
 def chat(request: ChatRequest) -> ChatResponse:
     message = request.message.strip()
     try:
-        result = gemini.ask(message, history=request.history)
+        # 覚えている事実をシステムプロンプトへ載せる。
+        # 件数が少ないうちは検索せず全件渡すのが確実で速い。
+        result = gemini.ask(
+            message, history=request.history, context=memory_tool.as_context()
+        )
     except gemini.GeminiError as exc:
         # 障害時は素直に伝える（仕様書 23章）
         return ChatResponse(ok=False, text=str(exc))

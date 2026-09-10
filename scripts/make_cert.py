@@ -10,8 +10,8 @@
   python scripts/make_cert.py
 
 生成後、.env に次を追記して再起動する:
-  SSL_CERT_FILE=config/cert.pem
-  SSL_KEY_FILE=config/key.pem
+  HTTPS_CERT_FILE=config/cert.pem
+  HTTPS_KEY_FILE=config/key.pem
 
 初回アクセス時はスマートフォンに「この接続ではプライバシーが保護されません」と
 表示されるので、「詳細設定」→「アクセスする」を選ぶ（家庭内LANのみで使う前提）。
@@ -109,8 +109,8 @@ def main() -> int:
     print(f"秘密鍵を作成しました: {KEY_PATH}")
     print()
     print(".env に次の2行を追記して、もう一度起動してください:")
-    print("  SSL_CERT_FILE=config/cert.pem")
-    print("  SSL_KEY_FILE=config/key.pem")
+    print("  HTTPS_CERT_FILE=config/cert.pem")
+    print("  HTTPS_KEY_FILE=config/key.pem")
     print()
     print("対象ホスト名 / IP:")
     for name in names:

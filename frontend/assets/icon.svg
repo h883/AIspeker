@@ -1,16 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Student AI Assistant">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#1b2a63"/>
-      <stop offset="1" stop-color="#0b1020"/>
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#f0f2f5"/>
     </linearGradient>
     <radialGradient id="orb" cx="35%" cy="30%" r="75%">
-      <stop offset="0" stop-color="#6f9cff"/>
-      <stop offset="0.6" stop-color="#2f4bb5"/>
-      <stop offset="1" stop-color="#1b2a63"/>
+      <stop offset="0" stop-color="#7d848f"/>
+      <stop offset="0.6" stop-color="#444a54"/>
+      <stop offset="1" stop-color="#262a31"/>
     </radialGradient>
   </defs>
   <rect width="512" height="512" rx="112" fill="url(#bg)"/>
   <circle cx="256" cy="256" r="158" fill="url(#orb)"/>
-  <circle cx="256" cy="256" r="72" fill="#ffffff" opacity="0.16"/>
+  <circle cx="256" cy="256" r="72" fill="#ffffff" opacity="0.18"/>
 </svg>

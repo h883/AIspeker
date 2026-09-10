@@ -70,6 +70,17 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
+def _legacy_https(name: str) -> str:
+    """旧名（SSL_CERT_FILE / SSL_KEY_FILE）を後方互換で読む。
+
+    両方そろっているときだけ採用する。CA バンドルの指定として
+    SSL_CERT_FILE だけが設定されている環境と区別するため。
+    """
+    if not (_env("SSL_CERT_FILE") and _env("SSL_KEY_FILE")):
+        return ""
+    return _env(name)
+
+
 def _apply() -> None:
     """環境変数の現在値をモジュール変数へ反映する。"""
     globals().update(
@@ -81,8 +92,16 @@ def _apply() -> None:
         # HTTPS。スマートフォンのマイク（Web Speech API）と PWA は
         # セキュアコンテキストでしか動かないため、LAN 越しに使うなら設定する。
         # python scripts/make_cert.py で自己署名証明書を作れる。
-        SSL_CERT_FILE=_env("SSL_CERT_FILE"),
-        SSL_KEY_FILE=_env("SSL_KEY_FILE"),
+        #
+        # SSL_CERT_FILE は OpenSSL が CA バンドルの場所を指すのに使う標準的な
+        # 環境変数名で、他のソフトが設定していると .env より優先されてしまう
+        # （起動時は実際の環境変数を .env で上書きしないため）。取り違えると
+        # CA バンドルをサーバー証明書として読み、KEY_VALUES_MISMATCH で落ちる。
+        # そのため HTTPS_ 接頭辞を正とする。
+        # 旧名は、鍵と対で指定されているときだけ後方互換として受け取る
+        # （CA バンドル用途なら SSL_KEY_FILE は設定されないため区別できる）。
+        HTTPS_CERT_FILE=_env("HTTPS_CERT_FILE") or _legacy_https("SSL_CERT_FILE"),
+        HTTPS_KEY_FILE=_env("HTTPS_KEY_FILE") or _legacy_https("SSL_KEY_FILE"),
 
         # --- Gemini ---
         GEMINI_API_KEY=_env("GEMINI_API_KEY"),

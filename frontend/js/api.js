@@ -54,6 +54,17 @@
     settings:      ()               => request("/api/settings"),
     saveSettings:  (values)         => request("/api/settings", json("PUT", { values: values })),
 
+    /* --- 記憶 --- */
+    memories:      ()               => request("/api/memory"),
+    addMemory:     (m)              => request("/api/memory", json("POST", m)),
+    deleteMemory:  (id)             => request("/api/memory/" + id, { method: "DELETE" }),
+    clearMemory:   ()               => request("/api/memory", { method: "DELETE" }),
+
+    /* --- 時間割 --- */
+    timetable:     ()               => request("/api/timetable"),
+    addLesson:     (l)              => request("/api/timetable", json("POST", l)),
+    deleteLesson:  (id)             => request("/api/timetable/" + id, { method: "DELETE" }),
+
     /* --- 初回セットアップ --- */
     setupState:    ()               => request("/api/setup"),
     testGemini:    (key, model)     => request("/api/setup/test-gemini",
@@ -62,6 +73,20 @@
     saveKeys:      (keys)           => request("/api/setup/keys", json("POST", keys)),
     saveProfile:   (values)         => request("/api/setup/profile", json("POST", { values: values })),
     completeSetup: ()               => request("/api/setup/complete", { method: "POST" }),
-    reopenSetup:   ()               => request("/api/setup/reopen", { method: "POST" })
+    reopenSetup:   ()               => request("/api/setup/reopen", { method: "POST" }),
+
+    /* --- Google カレンダー連携（画面だけで完了させる） --- */
+    googleState:   ()               => request("/api/setup/google"),
+    googleUpload:  (file)           => {
+                                        const form = new FormData();
+                                        form.append("file", file);
+                                        // Content-Type はブラウザに任せる（境界文字列が要るため）
+                                        return request("/api/setup/google/client-secret",
+                                                       { method: "POST", body: form });
+                                      },
+    googleStart:   ()               => request("/api/setup/google/start", { method: "POST" }),
+    googleFinish:  (url)            => request("/api/setup/google/finish",
+                                        json("POST", { redirected_url: url })),
+    googleDisconnect: ()            => request("/api/setup/google/disconnect", { method: "POST" })
   };
 })(window);

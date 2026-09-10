@@ -16,6 +16,9 @@ DEFAULTS: dict[str, Any] = {
     "school_name": "学校",
     "school_address": "",
     "school_start_time": "09:00",
+    # 時間割の時刻計算に使う（1限の開始 = school_start_time）
+    "period_minutes": 50,               # 1コマの長さ
+    "break_minutes": 10,                # コマ間の休み時間
     "home_address": "",
     "home_station": "",
     "travel_mode": "transit",          # transit / walking / bicycling / driving
@@ -25,6 +28,7 @@ DEFAULTS: dict[str, Any] = {
     "weather_lat": 34.6937,
     "weather_lon": 135.5023,
     "calendar_source": "local",        # local / google
+    "timetable_enabled": True,          # 時間割を予定として合成するか
     "google_calendar_id": "primary",
     "tts_enabled": True,
     "tts_rate": 1.0,

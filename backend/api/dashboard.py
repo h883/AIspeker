@@ -5,9 +5,11 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from backend.tools import calendar as calendar_tool
+from backend.tools import memory as memory_tool
 from backend.tools import reminder as reminder_tool
 from backend.tools import routes as routes_tool
 from backend.tools import time as time_tool
+from backend.tools import timetable as timetable_tool
 from backend.tools import weather as weather_tool
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
@@ -24,6 +26,21 @@ class ReminderCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     datetime: str
     message: str = ""
+
+
+class MemoryCreate(BaseModel):
+    key: str = Field(min_length=1, max_length=120)
+    value: str = Field(min_length=1, max_length=1000)
+    category: str = "general"
+    expires: str = ""
+
+
+class LessonCreate(BaseModel):
+    weekday: int = Field(ge=0, le=6)
+    period: int = Field(ge=1, le=12)
+    subject: str = Field(min_length=1, max_length=100)
+    teacher: str = ""
+    room: str = ""
 
 
 @router.get("/home")
@@ -116,3 +133,55 @@ def delete_reminder(reminder_id: int) -> dict:
 def due_reminders() -> dict:
     """時刻が来たリマインダーを取り出す。フロントが定期的にポーリングする。"""
     return {"ok": True, "due": reminder_tool.pop_due_reminders()}
+
+
+# --- 記憶（設定画面から中身を確認・訂正できるようにする）---
+
+@router.get("/memory")
+def memories(include_expired: bool = False) -> dict:
+    return memory_tool.list_memories(include_expired=include_expired)
+
+
+@router.post("/memory")
+def create_memory(payload: MemoryCreate) -> dict:
+    """画面からの登録。AI が覚えたものと区別するため source は manual にする。"""
+    return memory_tool.remember(
+        key=payload.key,
+        value=payload.value,
+        category=payload.category,
+        expires=payload.expires,
+        source="manual",
+    )
+
+
+@router.delete("/memory/{memory_id}")
+def remove_memory(memory_id: int) -> dict:
+    return memory_tool.delete_memory(memory_id)
+
+
+@router.delete("/memory")
+def clear_memory() -> dict:
+    return memory_tool.clear_memories()
+
+
+# --- 時間割 ---
+
+@router.get("/timetable")
+def timetable() -> dict:
+    return timetable_tool.list_timetable()
+
+
+@router.post("/timetable")
+def create_lesson(payload: LessonCreate) -> dict:
+    return timetable_tool.set_timetable(
+        weekday=payload.weekday,
+        period=payload.period,
+        subject=payload.subject,
+        teacher=payload.teacher,
+        room=payload.room,
+    )
+
+
+@router.delete("/timetable/{lesson_id}")
+def remove_lesson(lesson_id: int) -> dict:
+    return timetable_tool.delete_timetable(lesson_id)

@@ -9,9 +9,11 @@ from typing import Any, Callable
 
 from backend import user_settings
 from backend.tools import calendar as calendar_tool
+from backend.tools import memory as memory_tool
 from backend.tools import reminder as reminder_tool
 from backend.tools import routes as routes_tool
 from backend.tools import time as time_tool
+from backend.tools import timetable as timetable_tool
 from backend.tools import weather as weather_tool
 
 logger = logging.getLogger(__name__)
@@ -128,6 +130,109 @@ TOOL_DECLARATIONS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "name": "create_event",
+        "description": (
+            "単発の予定をカレンダーに登録する。"
+            "「明日15時に歯医者」のように日時と内容を言われたときに使う。"
+            "毎週繰り返す授業は set_timetable を使うこと。"
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "title": {"type": "STRING", "description": "予定の内容。例: 歯医者"},
+                "start": {
+                    "type": "STRING",
+                    "description": "開始日時。YYYY-MM-DDTHH:MM、HH:MM、または 明日 15:00 のような指定。",
+                },
+                "end": {"type": "STRING", "description": "終了日時。省略可。"},
+                "location": {"type": "STRING", "description": "場所。省略可。"},
+            },
+            "required": ["title", "start"],
+        },
+    },
+    {
+        "name": "get_timetable",
+        "description": (
+            "登録済みの時間割を取得する。「明日の1限は？」「木曜の授業は？」に答えるときに使う。"
+            "曜日も日付も省略すると1週間分をすべて返す。"
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "weekday": {"type": "STRING", "description": "曜日。月 / 火 / ... または 月曜。"},
+                "date": {"type": "STRING", "description": "対象日。YYYY-MM-DD、今日、明日など。"},
+            },
+        },
+    },
+    {
+        "name": "set_timetable",
+        "description": (
+            "毎週繰り返す授業を時間割に登録する。同じ曜日・時限は上書きされる。"
+            "「木曜の3限は情報処理」のように言われたときに使う。"
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "weekday": {"type": "STRING", "description": "曜日。月 / 火 / ... または 月曜。"},
+                "period": {"type": "INTEGER", "description": "時限。1限なら 1。"},
+                "subject": {"type": "STRING", "description": "科目名。例: 情報処理"},
+                "teacher": {"type": "STRING", "description": "担当の先生。省略可。"},
+                "room": {"type": "STRING", "description": "教室。省略可。"},
+            },
+            "required": ["weekday", "period", "subject"],
+        },
+    },
+    {
+        "name": "remember",
+        "description": (
+            "ユーザーについて覚えておくべき事実を記憶する。"
+            "「覚えておいて」と言われたとき、また次回以降も役立つ情報を聞いたときに使う。"
+            "同じ key で呼ぶと上書きになるので、覚え直しにも使える。"
+            "予定や授業は create_event / set_timetable を使い、ここには入れないこと。"
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "key": {"type": "STRING", "description": "覚える項目の名前。例: 情報処理の担当"},
+                "value": {"type": "STRING", "description": "覚える内容。例: 山田先生"},
+                "category": {
+                    "type": "STRING",
+                    "description": "分類。teacher / assignment / club / exam / school / preference / general。",
+                },
+                "expires": {
+                    "type": "STRING",
+                    "description": "覚えておく期限。YYYY-MM-DD、明日、来週など。提出物のように期限があるときだけ指定する。",
+                },
+            },
+            "required": ["key", "value"],
+        },
+    },
+    {
+        "name": "recall",
+        "description": (
+            "覚えている事実を検索する。過去に登録した内容を確認したいときに使う。"
+            "主要な記憶は最初から渡されているので、通常は呼ばなくてよい。"
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "query": {"type": "STRING", "description": "検索語。省略すると全件返す。"},
+                "category": {"type": "STRING", "description": "分類で絞り込む。省略可。"},
+            },
+        },
+    },
+    {
+        "name": "forget",
+        "description": "覚えている事実を削除する。「もう覚えなくていい」と言われたときに使う。",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "key": {"type": "STRING", "description": "消す項目の名前。"},
+            },
+            "required": ["key"],
+        },
+    },
 ]
 
 
@@ -139,6 +244,12 @@ HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     "get_weather": weather_tool.get_weather,
     "create_reminder": reminder_tool.create_reminder,
     "get_reminders": reminder_tool.get_reminders,
+    "create_event": calendar_tool.create_event,
+    "get_timetable": timetable_tool.get_timetable,
+    "set_timetable": timetable_tool.set_timetable,
+    "remember": memory_tool.remember,
+    "recall": memory_tool.recall,
+    "forget": memory_tool.forget,
 }
 
 

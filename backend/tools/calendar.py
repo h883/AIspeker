@@ -11,6 +11,8 @@ from typing import Any
 
 from backend import config, user_settings
 from backend.database import db
+from backend.tools import timetable as timetable_tool
+from backend.tools.reminder import parse_datetime
 from backend.tools.time import now, resolve_date, tz
 
 GOOGLE_SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
@@ -24,6 +26,65 @@ def add_local_event(title: str, start: str, end: str = "", location: str = "") -
         (title, start, end, location, now().isoformat(timespec="seconds")),
     )
     return {"ok": True, "id": event_id}
+
+
+def _naive_local(value: datetime) -> str:
+    """local_event に入れる形（タイムゾーンなしのローカル時刻）へ揃える。
+
+    オフセット付きで保存すると、SQLite の date() が UTC へ換算してしまい、
+    朝の予定が前日扱いになって範囲検索から漏れる。
+    画面の datetime-local 入力もオフセットなしなので、そちらに合わせる。
+    """
+    return value.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def create_event(
+    title: str = "",
+    start: str = "",
+    end: str = "",
+    location: str = "",
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """単発の予定を登録する（Tool Calling 用）。
+
+    「明日15時」のような話し言葉も受け取れるようにする。
+    解釈できなかったときは登録せず ok=False を返し、
+    別の日時で登録されたと誤解させない（仕様書 22章）。
+    """
+    title = (title or "").strip()
+    if not title:
+        return {"ok": False, "error": "予定の内容が指定されていません。"}
+
+    raw_start = (start or kwargs.get("datetime") or kwargs.get("date") or "").strip()
+    if not raw_start:
+        return {"ok": False, "error": "予定の日時が指定されていません。"}
+
+    start_dt = parse_datetime(raw_start)
+    if start_dt is None:
+        return {"ok": False, "error": f"予定の日時を解釈できませんでした（{raw_start}）。"}
+
+    end_iso = ""
+    raw_end = (end or "").strip()
+    if raw_end:
+        end_dt = parse_datetime(raw_end)
+        if end_dt is None:
+            return {"ok": False, "error": f"終了時刻を解釈できませんでした（{raw_end}）。"}
+        end_iso = _naive_local(end_dt)
+
+    result = add_local_event(
+        title,
+        _naive_local(start_dt),
+        end_iso,
+        (location or "").strip(),
+    )
+    return {
+        "ok": True,
+        "id": result["id"],
+        "title": title,
+        "start": start_dt.strftime("%Y-%m-%d %H:%M"),
+        "end": end_iso[:16].replace("T", " "),
+        "location": (location or "").strip(),
+    }
 
 
 def delete_local_event(event_id: int) -> dict[str, Any]:
@@ -123,6 +184,32 @@ def _google_events(date_str: str, days: int) -> list[dict[str, Any]] | None:
 
 # --- Tool 本体 ---
 
+def _timetable_events(date_str: str, days: int) -> list[dict[str, Any]]:
+    """期間内の各日について、登録済みの時間割を予定の形で返す。"""
+    if not user_settings.get("timetable_enabled", True):
+        return []
+    return timetable_tool.events_for_range(date_str, days)
+
+
+def _sort_key(event: dict[str, Any]) -> datetime:
+    """予定を時刻順に並べるための比較値。
+
+    ローカル予定と時間割はオフセットなし、Google はカレンダーの
+    タイムゾーン付きで返る。文字列のまま比べると、JST 以外のカレンダーの
+    予定が誤った位置に入るため、datetime に揃えてから比べる。
+    """
+    raw = str(event.get("start") or "")
+    if len(raw) == 10:
+        # 終日予定。その日の始まりとして扱い、時刻付きより前に置く
+        raw += "T00:00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        # 解釈できないものは末尾へ回す（落とさずに見せる）
+        return datetime.max.replace(tzinfo=tz())
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=tz())
+
+
 def get_calendar(date: str | None = None, days: int = 1) -> dict[str, Any]:
     target_date = resolve_date(date)
     days = max(1, min(int(days or 1), 14))
@@ -141,6 +228,13 @@ def get_calendar(date: str | None = None, days: int = 1) -> dict[str, Any]:
 
     if events is None:
         return {"ok": False, "error": "予定を取得できませんでした。"}
+
+    # 登録済みの時間割を合成する。これにより Google カレンダーを繋がなくても
+    # 「明日の最初の予定」から出発時刻を逆算できる（prompts.py の手順がそのまま動く）。
+    lessons = _timetable_events(target_date, days)
+    if lessons:
+        events = sorted(events + lessons, key=_sort_key)
+        used = f"{used}+timetable"
 
     return {
         "ok": True,

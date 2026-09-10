@@ -6,6 +6,7 @@ Gemini や外部 API は呼ばず、ツール解釈と Tool Calling ループの
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
@@ -27,11 +28,15 @@ os.environ["GEMINI_API_KEY"] = "test-key"
 from backend import config  # noqa: E402
 from backend.ai import gemini  # noqa: E402
 from backend.database import db  # noqa: E402
+from backend.tools import calendar as calendar_tool  # noqa: E402
+from backend.tools import memory as memory_tool  # noqa: E402
 from backend.tools import registry  # noqa: E402
 from backend.tools import reminder as reminder_tool  # noqa: E402
 from backend.tools import routes as routes_tool  # noqa: E402
 from backend.tools import time as time_tool  # noqa: E402
+from backend.tools import timetable as timetable_tool  # noqa: E402
 from backend.tools import weather as weather_tool  # noqa: E402
+from backend import user_settings  # noqa: E402
 
 
 class DateParsingTest(unittest.TestCase):
@@ -142,6 +147,100 @@ class EnvUpdateTest(unittest.TestCase):
         text = config.ENV_PATH.read_text(encoding="utf-8")
         self.assertNotIn("SSL_KEY_FILE", text)
         self.assertNotIn("PATH=", text)
+
+
+class HttpsConfigTest(unittest.TestCase):
+    """SSL_CERT_FILE は OpenSSL の標準変数名と衝突する。取り違えないこと。"""
+
+    def setUp(self) -> None:
+        self._saved = {
+            name: os.environ.get(name)
+            for name in ("HTTPS_CERT_FILE", "HTTPS_KEY_FILE", "SSL_CERT_FILE", "SSL_KEY_FILE")
+        }
+        for name in self._saved:
+            os.environ.pop(name, None)
+
+    def tearDown(self) -> None:
+        for name, value in self._saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        config._apply()
+
+    def test_new_names_are_used(self) -> None:
+        os.environ["HTTPS_CERT_FILE"] = "config/cert.pem"
+        os.environ["HTTPS_KEY_FILE"] = "config/key.pem"
+        config._apply()
+        self.assertEqual(config.HTTPS_CERT_FILE, "config/cert.pem")
+        self.assertEqual(config.HTTPS_KEY_FILE, "config/key.pem")
+
+    def test_legacy_pair_still_works(self) -> None:
+        """既存の .env をそのまま使い続けられる。"""
+        os.environ["SSL_CERT_FILE"] = "config/cert.pem"
+        os.environ["SSL_KEY_FILE"] = "config/key.pem"
+        config._apply()
+        self.assertEqual(config.HTTPS_CERT_FILE, "config/cert.pem")
+        self.assertEqual(config.HTTPS_KEY_FILE, "config/key.pem")
+
+    def test_openssl_ca_bundle_is_not_mistaken_for_a_certificate(self) -> None:
+        """CA バンドル指定として SSL_CERT_FILE だけがある環境を取り違えない。"""
+        os.environ["SSL_CERT_FILE"] = "/etc/ssl/certs/ca-certificates.crt"
+        config._apply()
+        self.assertEqual(config.HTTPS_CERT_FILE, "")
+        self.assertEqual(config.HTTPS_KEY_FILE, "")
+
+    def test_new_names_win_over_legacy(self) -> None:
+        os.environ["SSL_CERT_FILE"] = "/etc/ssl/certs/ca-certificates.crt"
+        os.environ["SSL_KEY_FILE"] = "/somewhere/old.pem"
+        os.environ["HTTPS_CERT_FILE"] = "config/cert.pem"
+        os.environ["HTTPS_KEY_FILE"] = "config/key.pem"
+        config._apply()
+        self.assertEqual(config.HTTPS_CERT_FILE, "config/cert.pem")
+
+
+class SslOptionsTest(unittest.TestCase):
+    """対でない証明書を渡すと uvicorn は即落ちする。Restart=always だと再起動地獄になる。"""
+
+    def _options(self, cert: str, key: str) -> dict:
+        from backend import main
+
+        with mock.patch.object(main.config, "HTTPS_CERT_FILE", cert), \
+             mock.patch.object(main.config, "HTTPS_KEY_FILE", key):
+            return main.ssl_options()
+
+    def test_unset_means_plain_http(self) -> None:
+        self.assertEqual(self._options("", ""), {})
+
+    def test_only_one_of_them_is_refused(self) -> None:
+        self.assertEqual(self._options("config/cert.pem", ""), {})
+        self.assertEqual(self._options("", "config/key.pem"), {})
+
+    def test_missing_file_falls_back_to_http(self) -> None:
+        """存在しないパスでも落ちずに HTTP で上がる。"""
+        self.assertEqual(self._options("/nope/cert.pem", "/nope/key.pem"), {})
+
+    def test_mismatched_pair_falls_back_to_http(self) -> None:
+        """CA バンドルを証明書として渡された場合など。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            cert = Path(tmp) / "cert.pem"
+            key = Path(tmp) / "key.pem"
+            cert.write_text("-----BEGIN CERTIFICATE-----\nnot-a-cert\n-----END CERTIFICATE-----\n")
+            key.write_text("-----BEGIN PRIVATE KEY-----\nnot-a-key\n-----END PRIVATE KEY-----\n")
+            self.assertEqual(self._options(str(cert), str(key)), {})
+
+    def test_matching_pair_is_passed_through(self) -> None:
+        context = mock.Mock()
+        from backend import main
+
+        with mock.patch.object(main.ssl, "SSLContext", return_value=context), \
+             mock.patch.object(main.config, "HTTPS_CERT_FILE", "config/cert.pem"), \
+             mock.patch.object(main.config, "HTTPS_KEY_FILE", "config/key.pem"):
+            options = main.ssl_options()
+
+        self.assertEqual(options,
+                         {"ssl_certfile": "config/cert.pem", "ssl_keyfile": "config/key.pem"})
+        context.load_cert_chain.assert_called_once_with("config/cert.pem", "config/key.pem")
 
 
 class ModelListingTest(unittest.TestCase):
@@ -438,6 +537,487 @@ class GeminiLoopTest(unittest.TestCase):
             with self.assertRaises(gemini.GeminiError) as ctx:
                 gemini.ask("こんにちは")
         self.assertIn("接続できません", str(ctx.exception))
+
+
+class MemoryTest(unittest.TestCase):
+    """長期記憶。Gemini はステートレスなので、記憶は Pi 側の責任になる。"""
+
+    def setUp(self) -> None:
+        db.init_db()
+        db.execute("DELETE FROM memory")
+
+    def test_remember_and_recall(self) -> None:
+        self.assertTrue(memory_tool.remember(key="情報処理の担当", value="山田先生",
+                                             category="teacher")["ok"])
+        found = memory_tool.recall(query="山田")
+        self.assertEqual(found["count"], 1)
+        self.assertEqual(found["memories"][0]["value"], "山田先生")
+
+    def test_same_key_overwrites(self) -> None:
+        """覚え直しは増殖ではなく上書きになる。"""
+        memory_tool.remember(key="情報処理の担当", value="山田先生", category="teacher")
+        memory_tool.remember(key="情報処理の担当", value="佐藤先生", category="teacher")
+        everything = memory_tool.recall()
+        self.assertEqual(everything["count"], 1)
+        self.assertEqual(everything["memories"][0]["value"], "佐藤先生")
+
+    def test_forget(self) -> None:
+        memory_tool.remember(key="部活", value="火曜と木曜")
+        self.assertTrue(memory_tool.forget("部活")["ok"])
+        self.assertEqual(memory_tool.recall()["count"], 0)
+
+    def test_forget_unknown_key_is_reported(self) -> None:
+        result = memory_tool.forget("知らない項目")
+        self.assertFalse(result["ok"])
+
+    def test_unparsable_expiry_is_rejected(self) -> None:
+        """期限を解釈できないときに黙って今日へ丸めない（誤って消えるのを防ぐ）。"""
+        result = memory_tool.remember(key="何か", value="内容", expires="いつか")
+        self.assertFalse(result["ok"])
+        self.assertIn("解釈できません", result["error"])
+        self.assertEqual(memory_tool.recall()["count"], 0)
+
+    def test_expired_memory_disappears(self) -> None:
+        memory_tool.remember(key="数学プリント", value="水曜提出",
+                             category="assignment", expires="明日")
+        past = (time_tool.now() - timedelta(days=1)).isoformat(timespec="seconds")
+        db.execute("UPDATE memory SET expires_at = ? WHERE key = ?", (past, "数学プリント"))
+
+        self.assertEqual(memory_tool.recall()["count"], 0)
+        self.assertEqual(memory_tool.purge_expired(), 1)
+
+    def test_context_carries_memories(self) -> None:
+        memory_tool.remember(key="情報処理の担当", value="山田先生", category="teacher")
+        context = memory_tool.as_context()
+        self.assertIn("情報処理の担当", context)
+        self.assertIn("山田先生", context)
+        self.assertIn("教員", context)
+
+    def test_context_is_empty_without_memories(self) -> None:
+        self.assertEqual(memory_tool.as_context(), "")
+
+
+class TimetableTest(unittest.TestCase):
+    def setUp(self) -> None:
+        db.init_db()
+        db.execute("DELETE FROM timetable")
+
+    def test_weekday_forms(self) -> None:
+        for value in ("木", "木曜", "木曜日", 3, "3", "thu", "thursday"):
+            with self.subTest(value=value):
+                self.assertEqual(timetable_tool.parse_weekday(value), 3)
+
+    def test_unknown_weekday_is_rejected(self) -> None:
+        self.assertIsNone(timetable_tool.parse_weekday("にゃー"))
+        result = timetable_tool.set_timetable(weekday="にゃー", period=1, subject="情報")
+        self.assertFalse(result["ok"])
+
+    def test_period_times_come_from_settings(self) -> None:
+        """1限の開始は授業開始時刻。2限以降はコマ長＋休みで積み上げる。"""
+        result = timetable_tool.set_timetable(weekday="月", period=3, subject="数学")
+        self.assertTrue(result["ok"])
+        # 09:00 開始 / 50分 + 休み10分 なので 3限は 11:00
+        self.assertEqual(result["start_time"], "11:00")
+        self.assertEqual(result["end_time"], "11:50")
+
+    def test_same_slot_overwrites(self) -> None:
+        timetable_tool.set_timetable(weekday="木", period=1, subject="情報処理")
+        timetable_tool.set_timetable(weekday="木", period=1, subject="英語")
+        lessons = timetable_tool.get_timetable(weekday="木")["lessons"]
+        self.assertEqual(len(lessons), 1)
+        self.assertEqual(lessons[0]["subject"], "英語")
+
+    def test_missing_subject_is_rejected(self) -> None:
+        self.assertFalse(timetable_tool.set_timetable(weekday="月", period=1, subject="  ")["ok"])
+
+    def test_get_by_date_resolves_weekday(self) -> None:
+        timetable_tool.set_timetable(weekday="木", period=1, subject="情報処理")
+        # 2026-09-10 は木曜
+        result = timetable_tool.get_timetable(date="2026-09-10")
+        self.assertEqual(result["weekday_label"], "木")
+        self.assertEqual(result["count"], 1)
+
+
+class CalendarMergeTest(unittest.TestCase):
+    """時間割を予定へ合成する。これで Google カレンダー無しでも出発時刻を逆算できる。"""
+
+    def setUp(self) -> None:
+        db.init_db()
+        db.execute("DELETE FROM timetable")
+        db.execute("DELETE FROM local_event")
+        user_settings.save({"timetable_enabled": True, "calendar_source": "local"})
+
+    def test_timetable_appears_in_calendar(self) -> None:
+        today = time_tool.now()
+        timetable_tool.set_timetable(
+            weekday=today.weekday(), period=1, subject="情報処理", room="A302"
+        )
+        result = calendar_tool.get_calendar(days=1)
+
+        self.assertTrue(result["ok"])
+        self.assertIn("timetable", result["source"])
+        titles = [event["title"] for event in result["events"]]
+        self.assertIn("1限 情報処理", titles)
+
+    def test_lessons_are_marked_as_timetable(self) -> None:
+        """確定した予定ではなく時間割由来だと分かるようにしておく。"""
+        today = time_tool.now()
+        timetable_tool.set_timetable(weekday=today.weekday(), period=1, subject="情報処理")
+        events = calendar_tool.get_calendar(days=1)["events"]
+        self.assertEqual(events[0]["source"], "timetable")
+
+    def test_events_are_sorted_together(self) -> None:
+        today = time_tool.now()
+        timetable_tool.set_timetable(weekday=today.weekday(), period=1, subject="情報処理")
+        calendar_tool.create_event(title="朝の用事", start=today.strftime("%Y-%m-%dT07:30"))
+
+        events = calendar_tool.get_calendar(days=1)["events"]
+        starts = [event["start"] for event in events]
+        self.assertEqual(starts, sorted(starts))
+        self.assertEqual(events[0]["title"], "朝の用事")
+
+    def test_google_events_are_merged_and_ordered(self) -> None:
+        """Google 接続時も時間割と混ぜて時刻順に並ぶ。"""
+        today = time_tool.now()
+        timetable_tool.set_timetable(weekday=today.weekday(), period=1, subject="情報処理")
+        date_str = today.strftime("%Y-%m-%d")
+        google = [{"id": "g1", "title": "朝の用事",
+                   "start": f"{date_str}T07:30:00+09:00", "end": "", "location": "",
+                   "all_day": False, "source": "google"}]
+
+        user_settings.save({"calendar_source": "google"})
+        try:
+            with mock.patch.object(calendar_tool, "_google_events", return_value=google):
+                result = calendar_tool.get_calendar(date=date_str, days=1)
+        finally:
+            user_settings.save({"calendar_source": "local"})
+
+        self.assertEqual(result["source"], "google+timetable")
+        self.assertEqual([event["title"] for event in result["events"]],
+                         ["朝の用事", "1限 情報処理"])
+
+    def test_other_timezone_events_are_placed_correctly(self) -> None:
+        """カレンダーのタイムゾーンが JST 以外でも並び順が狂わない。
+
+        文字列比較のままだと 00:30Z（= JST 09:30）が 09:00 の授業より前に来る。
+        """
+        today = time_tool.now()
+        timetable_tool.set_timetable(weekday=today.weekday(), period=1, subject="情報処理")
+        date_str = today.strftime("%Y-%m-%d")
+        google = [{"id": "g1", "title": "UTCで返る予定",
+                   "start": f"{date_str}T00:30:00+00:00", "end": "", "location": "",
+                   "all_day": False, "source": "google"}]
+
+        user_settings.save({"calendar_source": "google"})
+        try:
+            with mock.patch.object(calendar_tool, "_google_events", return_value=google):
+                result = calendar_tool.get_calendar(date=date_str, days=1)
+        finally:
+            user_settings.save({"calendar_source": "local"})
+
+        # JST 09:30 なので、09:00 の授業より後ろに来る
+        self.assertEqual([event["title"] for event in result["events"]],
+                         ["1限 情報処理", "UTCで返る予定"])
+
+    def test_all_day_events_come_first(self) -> None:
+        today = time_tool.now()
+        timetable_tool.set_timetable(weekday=today.weekday(), period=1, subject="情報処理")
+        date_str = today.strftime("%Y-%m-%d")
+        google = [{"id": "g1", "title": "文化祭", "start": date_str, "end": "",
+                   "location": "", "all_day": True, "source": "google"}]
+
+        user_settings.save({"calendar_source": "google"})
+        try:
+            with mock.patch.object(calendar_tool, "_google_events", return_value=google):
+                result = calendar_tool.get_calendar(date=date_str, days=1)
+        finally:
+            user_settings.save({"calendar_source": "local"})
+
+        self.assertEqual(result["events"][0]["title"], "文化祭")
+
+    def test_google_failure_falls_back_and_says_so(self) -> None:
+        """Google に繋がらないときは黙って諦めず、ローカルを見たことを示す。"""
+        user_settings.save({"calendar_source": "google"})
+        try:
+            with mock.patch.object(calendar_tool, "_google_events", return_value=None):
+                result = calendar_tool.get_calendar(days=1)
+        finally:
+            user_settings.save({"calendar_source": "local"})
+        self.assertTrue(result["ok"])
+        self.assertIn("local(fallback)", result["source"])
+
+    def test_can_be_switched_off(self) -> None:
+        today = time_tool.now()
+        timetable_tool.set_timetable(weekday=today.weekday(), period=1, subject="情報処理")
+        user_settings.save({"timetable_enabled": False})
+        try:
+            result = calendar_tool.get_calendar(days=1)
+        finally:
+            user_settings.save({"timetable_enabled": True})
+        self.assertEqual(result["count"], 0)
+        self.assertNotIn("timetable", result["source"])
+
+
+class CreateEventTest(unittest.TestCase):
+    def setUp(self) -> None:
+        db.init_db()
+        db.execute("DELETE FROM local_event")
+
+    def test_natural_time_is_accepted(self) -> None:
+        result = calendar_tool.create_event(title="歯医者", start="明日 15:00")
+        self.assertTrue(result["ok"])
+        expected = (time_tool.now() + timedelta(days=1)).strftime("%Y-%m-%d 15:00")
+        self.assertEqual(result["start"], expected)
+
+    def test_unparsable_time_does_not_create_anything(self) -> None:
+        """仕様書 22章: 解釈できないときに勝手な日時で登録しない。"""
+        result = calendar_tool.create_event(title="歯医者", start="そのうち")
+        self.assertFalse(result["ok"])
+        self.assertEqual(db.query("SELECT * FROM local_event"), [])
+
+    def test_title_is_required(self) -> None:
+        self.assertFalse(calendar_tool.create_event(title="", start="明日 15:00")["ok"])
+
+    def test_gemini_style_datetime_argument(self) -> None:
+        """Gemini が start ではなく datetime で渡してきても受け取れる。"""
+        result = calendar_tool.create_event(title="検定", datetime="2026-10-15T09:00")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["start"], "2026-10-15 09:00")
+
+
+class CalendarSourceGuardTest(unittest.TestCase):
+    """未連携のまま Google を取得元にすると、黙ってローカルで動いて誤解を生む。"""
+
+    def setUp(self) -> None:
+        user_settings.save({"calendar_source": "local"})
+
+    def tearDown(self) -> None:
+        user_settings.save({"calendar_source": "local"})
+
+    def _apply(self, values: dict, connected: bool) -> dict:
+        from backend.api import setup as setup_api
+
+        with mock.patch.object(setup_api.calendar_tool, "google_connected", return_value=connected):
+            return setup_api.apply_profile(values)
+
+    def test_unconnected_google_is_not_selected(self) -> None:
+        result = self._apply({"calendar_source": "google"}, connected=False)
+        self.assertEqual(result["settings"]["calendar_source"], "local")
+        self.assertIn("未連携", result["warning"])
+
+    def test_connected_google_is_accepted(self) -> None:
+        result = self._apply({"calendar_source": "google"}, connected=True)
+        self.assertEqual(result["settings"]["calendar_source"], "google")
+        self.assertEqual(result["warning"], "")
+
+    def test_other_values_are_still_saved(self) -> None:
+        """取得元だけ弾いて、同時に送られた他の項目は保存する。"""
+        result = self._apply(
+            {"calendar_source": "google", "user_name": "たろう", "buffer_minutes": 15},
+            connected=False,
+        )
+        self.assertEqual(result["settings"]["user_name"], "たろう")
+        self.assertEqual(result["settings"]["buffer_minutes"], 15)
+        self.assertEqual(result["settings"]["calendar_source"], "local")
+
+    def test_switching_back_to_local_always_works(self) -> None:
+        result = self._apply({"calendar_source": "local"}, connected=False)
+        self.assertEqual(result["settings"]["calendar_source"], "local")
+        self.assertEqual(result["warning"], "")
+
+
+class GoogleOAuthTest(unittest.TestCase):
+    """画面だけで OAuth を完了させる経路。Google へは接続せずに検証する。"""
+
+    def setUp(self) -> None:
+        from backend.api import google as google_api
+
+        self.api = google_api
+        self.secret = Path(config.GOOGLE_OAUTH_CLIENT_SECRET_FILE)
+        self.token = Path(config.GOOGLE_OAUTH_TOKEN_FILE)
+        self.secret.parent.mkdir(parents=True, exist_ok=True)
+        self.secret.unlink(missing_ok=True)
+        self.token.unlink(missing_ok=True)
+        google_api._pending.clear()
+        user_settings.save({"calendar_source": "local"})
+
+    def tearDown(self) -> None:
+        self.secret.unlink(missing_ok=True)
+        self.token.unlink(missing_ok=True)
+        self.api._pending.clear()
+        user_settings.save({"calendar_source": "local"})
+
+    # --- 貼り付けられた内容の解釈 ---
+
+    def test_extracts_code_from_pasted_url(self) -> None:
+        code, state, error = self.api.extract_code(
+            "http://127.0.0.1:8765/?state=abc&code=4/0Axyz&scope=https://www.googleapis.com/auth/calendar.readonly"
+        )
+        self.assertEqual(code, "4/0Axyz")
+        self.assertEqual(state, "abc")
+        self.assertEqual(error, "")
+
+    def test_accepts_a_bare_code(self) -> None:
+        code, state, _ = self.api.extract_code("4/0Axyz")
+        self.assertEqual(code, "4/0Axyz")
+        self.assertEqual(state, "")
+
+    def test_detects_denied_consent(self) -> None:
+        _code, _state, error = self.api.extract_code(
+            "http://127.0.0.1:8765/?error=access_denied&state=abc"
+        )
+        self.assertEqual(error, "access_denied")
+
+    def test_denied_consent_is_reported(self) -> None:
+        result = self.api.finish(self.api.Redirected(
+            redirected_url="http://127.0.0.1:8765/?error=access_denied&state=abc"))
+        self.assertFalse(result["ok"])
+        self.assertIn("許可されませんでした", result["error"])
+
+    # --- クライアント JSON の受け取り ---
+
+    def _upload(self, payload: bytes, filename: str = "client_secret.json") -> dict:
+        import asyncio
+
+        upload = mock.Mock()
+        upload.read = mock.AsyncMock(return_value=payload)
+        upload.filename = filename
+        return asyncio.run(self.api.upload_client_secret(upload))
+
+    def test_desktop_client_is_saved(self) -> None:
+        payload = json.dumps({"installed": {"client_id": "x.apps.googleusercontent.com",
+                                            "client_secret": "s",
+                                            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                                            "token_uri": "https://oauth2.googleapis.com/token"}})
+        result = self._upload(payload.encode("utf-8"))
+        self.assertTrue(result["ok"])
+        self.assertTrue(self.secret.exists())
+        self.assertTrue(result["client_secret_saved"])
+
+    def test_web_client_is_rejected_with_the_reason(self) -> None:
+        """ウェブアプリ型はループバックへ返せないので、ここで気づけるようにする。"""
+        payload = json.dumps({"web": {"client_id": "x", "client_secret": "s"}})
+        result = self._upload(payload.encode("utf-8"))
+        self.assertFalse(result["ok"])
+        self.assertIn("デスクトップアプリ", result["error"])
+
+    def test_broken_json_is_rejected(self) -> None:
+        result = self._upload(b"{ not json")
+        self.assertFalse(result["ok"])
+        self.assertIn("JSON", result["error"])
+
+    def test_empty_file_is_rejected(self) -> None:
+        self.assertFalse(self._upload(b"")["ok"])
+
+    # --- 認証の開始と完了 ---
+
+    def test_start_requires_the_client_secret(self) -> None:
+        result = self.api.start()
+        self.assertFalse(result["ok"])
+        self.assertIn("JSON", result["error"])
+
+    def _fake_flow(self, refresh_token: str = "refresh-me"):
+        creds = mock.Mock()
+        creds.refresh_token = refresh_token
+        creds.to_json.return_value = json.dumps({"token": "t", "refresh_token": refresh_token})
+        flow = mock.Mock()
+        flow.authorization_url.return_value = ("https://accounts.google.com/o/oauth2/auth?x=1", "state-1")
+        flow.credentials = creds
+        return flow
+
+    def test_start_then_finish_saves_the_token(self) -> None:
+        self.secret.write_text("{}", encoding="utf-8")
+        flow = self._fake_flow()
+
+        with mock.patch("google_auth_oauthlib.flow.Flow.from_client_secrets_file", return_value=flow):
+            started = self.api.start()
+        self.assertTrue(started["ok"])
+        self.assertEqual(started["state"], "state-1")
+        # 更新用トークンが返るよう offline+consent で要求している
+        kwargs = flow.authorization_url.call_args.kwargs
+        self.assertEqual(kwargs["access_type"], "offline")
+        self.assertEqual(kwargs["prompt"], "consent")
+
+        result = self.api.finish(self.api.Redirected(
+            redirected_url="http://127.0.0.1:8765/?state=state-1&code=4/0Axyz"))
+
+        self.assertTrue(result["ok"])
+        flow.fetch_token.assert_called_once_with(code="4/0Axyz")
+        self.assertTrue(self.token.exists())
+        self.assertIn("refresh_token", self.token.read_text(encoding="utf-8"))
+        # 連携できたら取得元も切り替える
+        self.assertEqual(user_settings.get("calendar_source"), "google")
+
+    def test_missing_refresh_token_is_refused(self) -> None:
+        """更新用トークンが無いと1時間で切れる。連携済みに見せない。"""
+        self.secret.write_text("{}", encoding="utf-8")
+        flow = self._fake_flow(refresh_token="")
+        with mock.patch("google_auth_oauthlib.flow.Flow.from_client_secrets_file", return_value=flow):
+            self.api.start()
+        result = self.api.finish(self.api.Redirected(
+            redirected_url="http://127.0.0.1:8765/?state=state-1&code=4/0Axyz"))
+
+        self.assertFalse(result["ok"])
+        self.assertIn("更新用", result["error"])
+        self.assertFalse(self.token.exists())
+        self.assertEqual(user_settings.get("calendar_source"), "local")
+
+    def test_finish_without_start_is_reported(self) -> None:
+        result = self.api.finish(self.api.Redirected(
+            redirected_url="http://127.0.0.1:8765/?state=unknown&code=4/0Axyz"))
+        self.assertFalse(result["ok"])
+        self.assertIn("やり直して", result["error"])
+
+    def test_url_without_a_code_is_reported(self) -> None:
+        result = self.api.finish(self.api.Redirected(redirected_url="http://127.0.0.1:8765/?foo=1"))
+        self.assertFalse(result["ok"])
+        self.assertIn("認証コード", result["error"])
+
+    def test_token_exchange_failure_keeps_things_unlinked(self) -> None:
+        self.secret.write_text("{}", encoding="utf-8")
+        flow = self._fake_flow()
+        flow.fetch_token.side_effect = ValueError("bad code")
+        with mock.patch("google_auth_oauthlib.flow.Flow.from_client_secrets_file", return_value=flow):
+            self.api.start()
+        result = self.api.finish(self.api.Redirected(
+            redirected_url="http://127.0.0.1:8765/?state=state-1&code=wrong"))
+
+        self.assertFalse(result["ok"])
+        self.assertFalse(self.token.exists())
+        self.assertEqual(user_settings.get("calendar_source"), "local")
+
+    def test_disconnect_removes_the_token(self) -> None:
+        self.token.write_text("{}", encoding="utf-8")
+        user_settings.save({"calendar_source": "google"})
+        result = self.api.disconnect()
+        self.assertTrue(result["ok"])
+        self.assertFalse(self.token.exists())
+        self.assertEqual(user_settings.get("calendar_source"), "local")
+
+    def test_redirect_uri_is_loopback(self) -> None:
+        """デスクトップアプリ型が許すのはループバックのみ。"""
+        self.assertTrue(self.api.REDIRECT_URI.startswith("http://127.0.0.1"))
+
+
+class ChatMemoryWiringTest(unittest.TestCase):
+    """記憶がシステムプロンプトへ実際に差し込まれるかを確認する。"""
+
+    def setUp(self) -> None:
+        db.init_db()
+        db.execute("DELETE FROM memory")
+
+    def test_memories_reach_gemini_as_context(self) -> None:
+        from backend.api import chat as chat_api
+
+        memory_tool.remember(key="情報処理の担当", value="山田先生", category="teacher")
+        answer = {"text": "山田先生です。", "tools": [], "tool_results": []}
+
+        with mock.patch.object(chat_api.gemini, "ask", return_value=answer) as ask:
+            chat_api.chat(chat_api.ChatRequest(message="情報の先生だれ？"))
+
+        context = ask.call_args.kwargs["context"]
+        self.assertIn("情報処理の担当", context)
+        self.assertIn("山田先生", context)
 
 
 if __name__ == "__main__":
