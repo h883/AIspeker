@@ -690,6 +690,47 @@ class CreateEventTest(unittest.TestCase):
         self.assertEqual(result["start"], "2026-10-15 09:00")
 
 
+class CalendarSourceGuardTest(unittest.TestCase):
+    """未連携のまま Google を取得元にすると、黙ってローカルで動いて誤解を生む。"""
+
+    def setUp(self) -> None:
+        user_settings.save({"calendar_source": "local"})
+
+    def tearDown(self) -> None:
+        user_settings.save({"calendar_source": "local"})
+
+    def _apply(self, values: dict, connected: bool) -> dict:
+        from backend.api import setup as setup_api
+
+        with mock.patch.object(setup_api.calendar_tool, "google_connected", return_value=connected):
+            return setup_api.apply_profile(values)
+
+    def test_unconnected_google_is_not_selected(self) -> None:
+        result = self._apply({"calendar_source": "google"}, connected=False)
+        self.assertEqual(result["settings"]["calendar_source"], "local")
+        self.assertIn("未連携", result["warning"])
+
+    def test_connected_google_is_accepted(self) -> None:
+        result = self._apply({"calendar_source": "google"}, connected=True)
+        self.assertEqual(result["settings"]["calendar_source"], "google")
+        self.assertEqual(result["warning"], "")
+
+    def test_other_values_are_still_saved(self) -> None:
+        """取得元だけ弾いて、同時に送られた他の項目は保存する。"""
+        result = self._apply(
+            {"calendar_source": "google", "user_name": "たろう", "buffer_minutes": 15},
+            connected=False,
+        )
+        self.assertEqual(result["settings"]["user_name"], "たろう")
+        self.assertEqual(result["settings"]["buffer_minutes"], 15)
+        self.assertEqual(result["settings"]["calendar_source"], "local")
+
+    def test_switching_back_to_local_always_works(self) -> None:
+        result = self._apply({"calendar_source": "local"}, connected=False)
+        self.assertEqual(result["settings"]["calendar_source"], "local")
+        self.assertEqual(result["warning"], "")
+
+
 class ChatMemoryWiringTest(unittest.TestCase):
     """記憶がシステムプロンプトへ実際に差し込まれるかを確認する。"""
 

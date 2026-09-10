@@ -213,6 +213,10 @@ python scripts/google_auth.py
 ブラウザで許可すると `config/google_token.json` が作られ、予定の取得元が Google カレンダーに切り替わります。
 トークンは Raspberry Pi 内にのみ保存されます。
 
+認証が済むまで、設定画面の「予定の取得元」で Google カレンダーは選べません。
+選べてしまうと、実際にはローカルの予定が出ているのに画面には
+「Google カレンダー」と表示され、連携できたと誤解するためです。
+
 ---
 
 ## Raspberry Pi へ移す

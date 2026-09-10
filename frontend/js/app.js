@@ -604,6 +604,20 @@
       else field.value = value;
     });
 
+    // 未連携のまま「Google カレンダー」を選べると、選んでも黙ってローカルで
+    // 動くため、連携できたと誤解させる。連携するまでは選べないようにする。
+    const sourceField = document.querySelector('[name="calendar_source"]');
+    const googleOption = sourceField && sourceField.querySelector('option[value="google"]');
+    if (googleOption) {
+      googleOption.disabled = !status.google_calendar;
+      googleOption.textContent = status.google_calendar
+        ? "Google カレンダー"
+        : "Google カレンダー（未連携）";
+      $("#calendar-source-note").textContent = status.google_calendar
+        ? ""
+        : "Google カレンダーを使うには、Raspberry Pi で python scripts/google_auth.py を実行して認証してください。";
+    }
+
     loadMemory();
   }
 

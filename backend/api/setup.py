@@ -85,11 +85,11 @@ def save_keys(payload: KeySave) -> dict:
 def apply_profile(values: dict) -> dict:
     """基本設定を保存する。設定画面からの保存でも同じ処理を通す。
 
-    天気の地名が引けなかった場合でも、他の項目は保存する。
-    地名ひとつのために名前や住所の入力をやり直させないため。
+    保存できなかった項目があっても、他の項目は保存する。
+    ひとつの入力ミスのために全部やり直させないため。
     """
     values = dict(values)
-    warning = ""
+    warnings: list[str] = []
 
     # 天気の地域が変わったら緯度経度も取り直す（古い座標のまま予報を出さないため）
     location = str(values.get("weather_location") or "").strip()
@@ -100,13 +100,23 @@ def apply_profile(values: dict) -> dict:
         else:
             # 座標を更新できないので、地名も前のままにしておく（食い違いを防ぐ）
             values.pop("weather_location", None)
-            warning = (
+            warnings.append(
                 f"「{location}」の場所が見つかりませんでした。"
                 f"天気は「{user_settings.get('weather_location')}」のままにしています。"
                 "市区町村名（例: 大阪市）で入力し直してください。"
             )
 
-    return {"ok": True, "warning": warning, "settings": user_settings.save(values)}
+    # Google カレンダーは認証しないと読めない。未連携のまま取得元に選ばれても
+    # 切り替えない。切り替えるとローカルの予定が出ているのに画面には
+    # 「Google カレンダー」と表示され、連携できたと誤解させるため。
+    if str(values.get("calendar_source") or "") == "google" and not calendar_tool.google_connected():
+        values.pop("calendar_source", None)
+        warnings.append(
+            "Google カレンダーは未連携のため、予定の取得元は変更していません。"
+            "Raspberry Pi で python scripts/google_auth.py を実行して認証してください。"
+        )
+
+    return {"ok": True, "warning": " ".join(warnings), "settings": user_settings.save(values)}
 
 
 @router.post("/profile")
