@@ -400,9 +400,12 @@
       const item = document.createElement("div");
       item.className = "item";
       item.innerHTML =
-        '<div><p class="item-title"></p><p class="item-sub"></p></div><span class="item-time"></span>';
-      item.querySelector(".item-title").textContent = memory.key + ": " + memory.value;
-      item.querySelector(".item-sub").textContent =
+        '<div><p class="item-title"></p><p class="item-sub"></p><p class="item-meta"></p></div>' +
+        '<span class="item-time"></span>';
+      // 項目名と内容を上下に分ける。1行に詰めると長いものが折り返して読みにくい。
+      item.querySelector(".item-title").textContent = memory.key;
+      item.querySelector(".item-sub").textContent = memory.value;
+      item.querySelector(".item-meta").textContent =
         [memory.category_label, memory.expires_at ? "期限 " + memory.expires_at : ""]
           .filter(Boolean).join(" · ");
       item.querySelector(".item-time").textContent = memory.source === "manual" ? "手入力" : "AI";

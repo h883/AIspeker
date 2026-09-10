@@ -168,6 +168,8 @@ html, body {
 
 .item-title { font-size: 15px; font-weight: 600; margin: 0 0 3px; }
 .item-sub { font-size: 13px; color: var(--muted); margin: 0; }
+/* 分類・期限のような、内容より一段弱い付帯情報 */
+.item-meta { font-size: 11px; color: var(--muted); opacity: .75; margin: 3px 0 0; }
 .item-time { font-variant-numeric: tabular-nums; color: var(--accent); font-size: 14px; white-space: nowrap; }
 .empty { color: var(--muted); font-size: 14px; padding: 10px 2px; }
 .error-box {
