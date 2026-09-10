@@ -27,11 +27,15 @@ os.environ["GEMINI_API_KEY"] = "test-key"
 from backend import config  # noqa: E402
 from backend.ai import gemini  # noqa: E402
 from backend.database import db  # noqa: E402
+from backend.tools import calendar as calendar_tool  # noqa: E402
+from backend.tools import memory as memory_tool  # noqa: E402
 from backend.tools import registry  # noqa: E402
 from backend.tools import reminder as reminder_tool  # noqa: E402
 from backend.tools import routes as routes_tool  # noqa: E402
 from backend.tools import time as time_tool  # noqa: E402
+from backend.tools import timetable as timetable_tool  # noqa: E402
 from backend.tools import weather as weather_tool  # noqa: E402
+from backend import user_settings  # noqa: E402
 
 
 class DateParsingTest(unittest.TestCase):
@@ -438,6 +442,203 @@ class GeminiLoopTest(unittest.TestCase):
             with self.assertRaises(gemini.GeminiError) as ctx:
                 gemini.ask("こんにちは")
         self.assertIn("接続できません", str(ctx.exception))
+
+
+class MemoryTest(unittest.TestCase):
+    """長期記憶。Gemini はステートレスなので、記憶は Pi 側の責任になる。"""
+
+    def setUp(self) -> None:
+        db.init_db()
+        db.execute("DELETE FROM memory")
+
+    def test_remember_and_recall(self) -> None:
+        self.assertTrue(memory_tool.remember(key="情報処理の担当", value="山田先生",
+                                             category="teacher")["ok"])
+        found = memory_tool.recall(query="山田")
+        self.assertEqual(found["count"], 1)
+        self.assertEqual(found["memories"][0]["value"], "山田先生")
+
+    def test_same_key_overwrites(self) -> None:
+        """覚え直しは増殖ではなく上書きになる。"""
+        memory_tool.remember(key="情報処理の担当", value="山田先生", category="teacher")
+        memory_tool.remember(key="情報処理の担当", value="佐藤先生", category="teacher")
+        everything = memory_tool.recall()
+        self.assertEqual(everything["count"], 1)
+        self.assertEqual(everything["memories"][0]["value"], "佐藤先生")
+
+    def test_forget(self) -> None:
+        memory_tool.remember(key="部活", value="火曜と木曜")
+        self.assertTrue(memory_tool.forget("部活")["ok"])
+        self.assertEqual(memory_tool.recall()["count"], 0)
+
+    def test_forget_unknown_key_is_reported(self) -> None:
+        result = memory_tool.forget("知らない項目")
+        self.assertFalse(result["ok"])
+
+    def test_unparsable_expiry_is_rejected(self) -> None:
+        """期限を解釈できないときに黙って今日へ丸めない（誤って消えるのを防ぐ）。"""
+        result = memory_tool.remember(key="何か", value="内容", expires="いつか")
+        self.assertFalse(result["ok"])
+        self.assertIn("解釈できません", result["error"])
+        self.assertEqual(memory_tool.recall()["count"], 0)
+
+    def test_expired_memory_disappears(self) -> None:
+        memory_tool.remember(key="数学プリント", value="水曜提出",
+                             category="assignment", expires="明日")
+        past = (time_tool.now() - timedelta(days=1)).isoformat(timespec="seconds")
+        db.execute("UPDATE memory SET expires_at = ? WHERE key = ?", (past, "数学プリント"))
+
+        self.assertEqual(memory_tool.recall()["count"], 0)
+        self.assertEqual(memory_tool.purge_expired(), 1)
+
+    def test_context_carries_memories(self) -> None:
+        memory_tool.remember(key="情報処理の担当", value="山田先生", category="teacher")
+        context = memory_tool.as_context()
+        self.assertIn("情報処理の担当", context)
+        self.assertIn("山田先生", context)
+        self.assertIn("教員", context)
+
+    def test_context_is_empty_without_memories(self) -> None:
+        self.assertEqual(memory_tool.as_context(), "")
+
+
+class TimetableTest(unittest.TestCase):
+    def setUp(self) -> None:
+        db.init_db()
+        db.execute("DELETE FROM timetable")
+
+    def test_weekday_forms(self) -> None:
+        for value in ("木", "木曜", "木曜日", 3, "3", "thu", "thursday"):
+            with self.subTest(value=value):
+                self.assertEqual(timetable_tool.parse_weekday(value), 3)
+
+    def test_unknown_weekday_is_rejected(self) -> None:
+        self.assertIsNone(timetable_tool.parse_weekday("にゃー"))
+        result = timetable_tool.set_timetable(weekday="にゃー", period=1, subject="情報")
+        self.assertFalse(result["ok"])
+
+    def test_period_times_come_from_settings(self) -> None:
+        """1限の開始は授業開始時刻。2限以降はコマ長＋休みで積み上げる。"""
+        result = timetable_tool.set_timetable(weekday="月", period=3, subject="数学")
+        self.assertTrue(result["ok"])
+        # 09:00 開始 / 50分 + 休み10分 なので 3限は 11:00
+        self.assertEqual(result["start_time"], "11:00")
+        self.assertEqual(result["end_time"], "11:50")
+
+    def test_same_slot_overwrites(self) -> None:
+        timetable_tool.set_timetable(weekday="木", period=1, subject="情報処理")
+        timetable_tool.set_timetable(weekday="木", period=1, subject="英語")
+        lessons = timetable_tool.get_timetable(weekday="木")["lessons"]
+        self.assertEqual(len(lessons), 1)
+        self.assertEqual(lessons[0]["subject"], "英語")
+
+    def test_missing_subject_is_rejected(self) -> None:
+        self.assertFalse(timetable_tool.set_timetable(weekday="月", period=1, subject="  ")["ok"])
+
+    def test_get_by_date_resolves_weekday(self) -> None:
+        timetable_tool.set_timetable(weekday="木", period=1, subject="情報処理")
+        # 2026-09-10 は木曜
+        result = timetable_tool.get_timetable(date="2026-09-10")
+        self.assertEqual(result["weekday_label"], "木")
+        self.assertEqual(result["count"], 1)
+
+
+class CalendarMergeTest(unittest.TestCase):
+    """時間割を予定へ合成する。これで Google カレンダー無しでも出発時刻を逆算できる。"""
+
+    def setUp(self) -> None:
+        db.init_db()
+        db.execute("DELETE FROM timetable")
+        db.execute("DELETE FROM local_event")
+        user_settings.save({"timetable_enabled": True, "calendar_source": "local"})
+
+    def test_timetable_appears_in_calendar(self) -> None:
+        today = time_tool.now()
+        timetable_tool.set_timetable(
+            weekday=today.weekday(), period=1, subject="情報処理", room="A302"
+        )
+        result = calendar_tool.get_calendar(days=1)
+
+        self.assertTrue(result["ok"])
+        self.assertIn("timetable", result["source"])
+        titles = [event["title"] for event in result["events"]]
+        self.assertIn("1限 情報処理", titles)
+
+    def test_lessons_are_marked_as_timetable(self) -> None:
+        """確定した予定ではなく時間割由来だと分かるようにしておく。"""
+        today = time_tool.now()
+        timetable_tool.set_timetable(weekday=today.weekday(), period=1, subject="情報処理")
+        events = calendar_tool.get_calendar(days=1)["events"]
+        self.assertEqual(events[0]["source"], "timetable")
+
+    def test_events_are_sorted_together(self) -> None:
+        today = time_tool.now()
+        timetable_tool.set_timetable(weekday=today.weekday(), period=1, subject="情報処理")
+        calendar_tool.create_event(title="朝の用事", start=today.strftime("%Y-%m-%dT07:30"))
+
+        events = calendar_tool.get_calendar(days=1)["events"]
+        starts = [event["start"] for event in events]
+        self.assertEqual(starts, sorted(starts))
+        self.assertEqual(events[0]["title"], "朝の用事")
+
+    def test_can_be_switched_off(self) -> None:
+        today = time_tool.now()
+        timetable_tool.set_timetable(weekday=today.weekday(), period=1, subject="情報処理")
+        user_settings.save({"timetable_enabled": False})
+        try:
+            result = calendar_tool.get_calendar(days=1)
+        finally:
+            user_settings.save({"timetable_enabled": True})
+        self.assertEqual(result["count"], 0)
+        self.assertNotIn("timetable", result["source"])
+
+
+class CreateEventTest(unittest.TestCase):
+    def setUp(self) -> None:
+        db.init_db()
+        db.execute("DELETE FROM local_event")
+
+    def test_natural_time_is_accepted(self) -> None:
+        result = calendar_tool.create_event(title="歯医者", start="明日 15:00")
+        self.assertTrue(result["ok"])
+        expected = (time_tool.now() + timedelta(days=1)).strftime("%Y-%m-%d 15:00")
+        self.assertEqual(result["start"], expected)
+
+    def test_unparsable_time_does_not_create_anything(self) -> None:
+        """仕様書 22章: 解釈できないときに勝手な日時で登録しない。"""
+        result = calendar_tool.create_event(title="歯医者", start="そのうち")
+        self.assertFalse(result["ok"])
+        self.assertEqual(db.query("SELECT * FROM local_event"), [])
+
+    def test_title_is_required(self) -> None:
+        self.assertFalse(calendar_tool.create_event(title="", start="明日 15:00")["ok"])
+
+    def test_gemini_style_datetime_argument(self) -> None:
+        """Gemini が start ではなく datetime で渡してきても受け取れる。"""
+        result = calendar_tool.create_event(title="検定", datetime="2026-10-15T09:00")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["start"], "2026-10-15 09:00")
+
+
+class ChatMemoryWiringTest(unittest.TestCase):
+    """記憶がシステムプロンプトへ実際に差し込まれるかを確認する。"""
+
+    def setUp(self) -> None:
+        db.init_db()
+        db.execute("DELETE FROM memory")
+
+    def test_memories_reach_gemini_as_context(self) -> None:
+        from backend.api import chat as chat_api
+
+        memory_tool.remember(key="情報処理の担当", value="山田先生", category="teacher")
+        answer = {"text": "山田先生です。", "tools": [], "tool_results": []}
+
+        with mock.patch.object(chat_api.gemini, "ask", return_value=answer) as ask:
+            chat_api.chat(chat_api.ChatRequest(message="情報の先生だれ？"))
+
+        context = ask.call_args.kwargs["context"]
+        self.assertIn("情報処理の担当", context)
+        self.assertIn("山田先生", context)
 
 
 if __name__ == "__main__":

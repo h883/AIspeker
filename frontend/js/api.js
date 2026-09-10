@@ -54,6 +54,17 @@
     settings:      ()               => request("/api/settings"),
     saveSettings:  (values)         => request("/api/settings", json("PUT", { values: values })),
 
+    /* --- 記憶 --- */
+    memories:      ()               => request("/api/memory"),
+    addMemory:     (m)              => request("/api/memory", json("POST", m)),
+    deleteMemory:  (id)             => request("/api/memory/" + id, { method: "DELETE" }),
+    clearMemory:   ()               => request("/api/memory", { method: "DELETE" }),
+
+    /* --- 時間割 --- */
+    timetable:     ()               => request("/api/timetable"),
+    addLesson:     (l)              => request("/api/timetable", json("POST", l)),
+    deleteLesson:  (id)             => request("/api/timetable/" + id, { method: "DELETE" }),
+
     /* --- 初回セットアップ --- */
     setupState:    ()               => request("/api/setup"),
     testGemini:    (key, model)     => request("/api/setup/test-gemini",

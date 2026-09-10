@@ -206,6 +206,14 @@ html, body {
   min-width: 48px;
 }
 
+/* ---------- 見出し付きのまとまり（時間割・記憶）---------- */
+.block { margin-bottom: 20px; }
+.block h2 { font-size: 15px; margin: 12px 0 4px; color: var(--muted); font-weight: 500; }
+
+/* 曜日+時限、項目名+分類のように、狭い画面でも横に並べたい組み合わせ */
+.row { display: flex; gap: 10px; }
+.row > * { flex: 1 1 0; min-width: 0; }
+
 /* ---------- フォーム ---------- */
 .stack-form { display: grid; gap: 10px; margin-bottom: 20px; }
 .stack-form h2 { font-size: 15px; margin: 12px 0 0; color: var(--muted); font-weight: 500; }

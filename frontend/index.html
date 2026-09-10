@@ -235,6 +235,44 @@
       <input id="event-location" type="text" placeholder="場所（任意）">
       <button type="submit">追加</button>
     </form>
+
+    <div class="block">
+      <h2>時間割</h2>
+      <p class="note">
+        毎週くり返す授業を登録します。上の予定にも自動で反映され、
+        「明日の1限は？」「何時に家出たらいい？」に答えられるようになります。
+      </p>
+      <div id="timetable-list" class="list"></div>
+    </div>
+
+    <form id="lesson-form" class="stack-form">
+      <h2>授業を追加</h2>
+      <div class="row">
+        <select id="lesson-weekday" aria-label="曜日">
+          <option value="0">月</option>
+          <option value="1">火</option>
+          <option value="2">水</option>
+          <option value="3">木</option>
+          <option value="4">金</option>
+          <option value="5">土</option>
+          <option value="6">日</option>
+        </select>
+        <select id="lesson-period" aria-label="時限">
+          <option value="1">1限</option>
+          <option value="2">2限</option>
+          <option value="3">3限</option>
+          <option value="4">4限</option>
+          <option value="5">5限</option>
+          <option value="6">6限</option>
+          <option value="7">7限</option>
+          <option value="8">8限</option>
+        </select>
+      </div>
+      <input id="lesson-subject" type="text" placeholder="科目名" required>
+      <input id="lesson-teacher" type="text" placeholder="先生（任意）">
+      <input id="lesson-room" type="text" placeholder="教室（任意）">
+      <button type="submit">登録</button>
+    </form>
   </section>
 
   <!-- ================= 経路 ================= -->
@@ -343,6 +381,16 @@
         これを避けたい場合は、Raspberry PiにUSBマイクを付けてopenWakeWordを動かす構成が必要です（README参照）。
       </p>
 
+      <h2>時間割</h2>
+      <label class="switch">
+        <input id="set-timetable_enabled" name="timetable_enabled" type="checkbox"> 時間割を予定に表示する
+      </label>
+      <label class="field-label" for="set-period_minutes">1コマの長さ（分）</label>
+      <input id="set-period_minutes" name="period_minutes" type="number" min="10" max="180">
+      <label class="field-label" for="set-break_minutes">コマ間の休み時間（分）</label>
+      <input id="set-break_minutes" name="break_minutes" type="number" min="0" max="60">
+      <p class="note">1限の開始時刻は上の「いつもの授業開始時刻」を使います。</p>
+
       <h2>その他</h2>
       <label class="switch"><input id="set-tts_enabled" name="tts_enabled" type="checkbox"> 回答を読み上げる</label>
       <label class="switch"><input id="set-save_history" name="save_history" type="checkbox"> 会話履歴を保存する</label>
@@ -350,6 +398,35 @@
 
       <button type="submit">保存</button>
       <p id="settings-saved" class="saved-note" hidden>保存しました</p>
+    </form>
+
+    <div class="block">
+      <h2>覚えていること</h2>
+      <p class="note">
+        AIが会話から覚えた内容です。聞き間違いがあればここで消せます。
+        「AI」と付いているものはAIが自分で覚えたもの、「手入力」はこの画面から登録したものです。
+      </p>
+      <div id="memory-list" class="list"></div>
+      <button id="memory-clear" class="secondary" type="button">覚えていることを全部消す</button>
+    </div>
+
+    <form id="memory-form" class="stack-form">
+      <h2>覚えさせる</h2>
+      <div class="row">
+        <input id="memory-key" type="text" placeholder="項目名（例: 情報処理の担当）" required>
+        <select id="memory-category" aria-label="分類">
+          <option value="general">その他</option>
+          <option value="teacher">教員</option>
+          <option value="assignment">課題</option>
+          <option value="club">部活</option>
+          <option value="exam">試験</option>
+          <option value="school">学校</option>
+          <option value="preference">好み</option>
+        </select>
+      </div>
+      <input id="memory-value" type="text" placeholder="内容（例: 山田先生）" required>
+      <input id="memory-expires" type="date" aria-label="覚えておく期限（任意）">
+      <button type="submit">覚えさせる</button>
     </form>
 
     <button id="settings-reopen-setup" class="secondary" type="button">

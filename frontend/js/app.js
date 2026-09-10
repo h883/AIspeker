@@ -335,6 +335,88 @@
       }
       container.appendChild(item);
     });
+
+    loadTimetable();
+  }
+
+  /* ================= 時間割 ================= */
+
+  async function loadTimetable() {
+    const container = $("#timetable-list");
+    container.innerHTML = "";
+    let data;
+    try {
+      data = await API.timetable();
+    } catch (err) {
+      container.appendChild(errorBox(err.message));
+      return;
+    }
+    if (!data.lessons.length) {
+      container.innerHTML = '<p class="empty">まだ登録されていません。下から追加できます。</p>';
+      return;
+    }
+
+    data.lessons.forEach(lesson => {
+      const item = document.createElement("div");
+      item.className = "item";
+      item.innerHTML =
+        '<div><p class="item-title"></p><p class="item-sub"></p></div><span class="item-time"></span>';
+      item.querySelector(".item-title").textContent =
+        data.weekdays[lesson.weekday] + " " + lesson.period + "限 " + lesson.subject;
+      item.querySelector(".item-sub").textContent =
+        [lesson.teacher, lesson.room].filter(Boolean).join(" · ");
+      item.querySelector(".item-time").textContent = lesson.start_time;
+
+      const del = document.createElement("button");
+      del.className = "tiny";
+      del.textContent = "削除";
+      del.onclick = async () => {
+        try { await API.deleteLesson(lesson.id); } catch (err) { showToast(err.message); return; }
+        loadCalendar();
+      };
+      item.appendChild(del);
+      container.appendChild(item);
+    });
+  }
+
+  /* ================= 記憶 ================= */
+
+  async function loadMemory() {
+    const container = $("#memory-list");
+    container.innerHTML = "";
+    let data;
+    try {
+      data = await API.memories();
+    } catch (err) {
+      container.appendChild(errorBox(err.message));
+      return;
+    }
+    if (!data.memories.length) {
+      container.innerHTML = '<p class="empty">まだ何も覚えていません。</p>';
+      return;
+    }
+
+    data.memories.forEach(memory => {
+      const item = document.createElement("div");
+      item.className = "item";
+      item.innerHTML =
+        '<div><p class="item-title"></p><p class="item-sub"></p></div><span class="item-time"></span>';
+      item.querySelector(".item-title").textContent = memory.key + ": " + memory.value;
+      item.querySelector(".item-sub").textContent =
+        [memory.category_label, memory.expires_at ? "期限 " + memory.expires_at : ""]
+          .filter(Boolean).join(" · ");
+      item.querySelector(".item-time").textContent = memory.source === "manual" ? "手入力" : "AI";
+
+      const del = document.createElement("button");
+      del.className = "tiny";
+      del.textContent = "削除";
+      del.onclick = async () => {
+        try { await API.deleteMemory(memory.id); } catch (err) { showToast(err.message); return; }
+        loadMemory();
+      };
+      item.appendChild(del);
+      container.appendChild(item);
+    });
   }
 
   function errorBox(message) {
@@ -518,6 +600,8 @@
       if (field.type === "checkbox") field.checked = Boolean(value);
       else field.value = value;
     });
+
+    loadMemory();
   }
 
   async function saveSettings(event) {
@@ -861,6 +945,48 @@
         loadReminders();
         showToast(data.datetime + " に通知します");
       } catch (err) { showToast(err.message); }
+    };
+
+    $("#lesson-form").onsubmit = async (event) => {
+      event.preventDefault();
+      try {
+        const data = await API.addLesson({
+          weekday: Number($("#lesson-weekday").value),
+          period: Number($("#lesson-period").value),
+          subject: $("#lesson-subject").value.trim(),
+          teacher: $("#lesson-teacher").value.trim(),
+          room: $("#lesson-room").value.trim()
+        });
+        if (!data.ok) { showToast(data.error); return; }
+        $("#lesson-subject").value = "";
+        $("#lesson-teacher").value = "";
+        $("#lesson-room").value = "";
+        loadCalendar();
+        showToast(data.weekday_label + "曜 " + data.period + "限に登録しました");
+      } catch (err) { showToast(err.message); }
+    };
+
+    $("#memory-form").onsubmit = async (event) => {
+      event.preventDefault();
+      try {
+        const data = await API.addMemory({
+          key: $("#memory-key").value.trim(),
+          value: $("#memory-value").value.trim(),
+          category: $("#memory-category").value,
+          expires: $("#memory-expires").value
+        });
+        if (!data.ok) { showToast(data.error); return; }
+        $("#memory-form").reset();
+        loadMemory();
+        showToast("覚えました");
+      } catch (err) { showToast(err.message); }
+    };
+
+    $("#memory-clear").onclick = async () => {
+      if (!window.confirm("覚えていることを全部消します。よろしいですか？")) return;
+      try { await API.clearMemory(); } catch (err) { showToast(err.message); return; }
+      loadMemory();
+      showToast("覚えていることを消しました");
     };
 
     $("#history-clear").onclick = async () => {
