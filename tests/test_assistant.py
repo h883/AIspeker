@@ -149,6 +149,100 @@ class EnvUpdateTest(unittest.TestCase):
         self.assertNotIn("PATH=", text)
 
 
+class HttpsConfigTest(unittest.TestCase):
+    """SSL_CERT_FILE は OpenSSL の標準変数名と衝突する。取り違えないこと。"""
+
+    def setUp(self) -> None:
+        self._saved = {
+            name: os.environ.get(name)
+            for name in ("HTTPS_CERT_FILE", "HTTPS_KEY_FILE", "SSL_CERT_FILE", "SSL_KEY_FILE")
+        }
+        for name in self._saved:
+            os.environ.pop(name, None)
+
+    def tearDown(self) -> None:
+        for name, value in self._saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        config._apply()
+
+    def test_new_names_are_used(self) -> None:
+        os.environ["HTTPS_CERT_FILE"] = "config/cert.pem"
+        os.environ["HTTPS_KEY_FILE"] = "config/key.pem"
+        config._apply()
+        self.assertEqual(config.HTTPS_CERT_FILE, "config/cert.pem")
+        self.assertEqual(config.HTTPS_KEY_FILE, "config/key.pem")
+
+    def test_legacy_pair_still_works(self) -> None:
+        """既存の .env をそのまま使い続けられる。"""
+        os.environ["SSL_CERT_FILE"] = "config/cert.pem"
+        os.environ["SSL_KEY_FILE"] = "config/key.pem"
+        config._apply()
+        self.assertEqual(config.HTTPS_CERT_FILE, "config/cert.pem")
+        self.assertEqual(config.HTTPS_KEY_FILE, "config/key.pem")
+
+    def test_openssl_ca_bundle_is_not_mistaken_for_a_certificate(self) -> None:
+        """CA バンドル指定として SSL_CERT_FILE だけがある環境を取り違えない。"""
+        os.environ["SSL_CERT_FILE"] = "/etc/ssl/certs/ca-certificates.crt"
+        config._apply()
+        self.assertEqual(config.HTTPS_CERT_FILE, "")
+        self.assertEqual(config.HTTPS_KEY_FILE, "")
+
+    def test_new_names_win_over_legacy(self) -> None:
+        os.environ["SSL_CERT_FILE"] = "/etc/ssl/certs/ca-certificates.crt"
+        os.environ["SSL_KEY_FILE"] = "/somewhere/old.pem"
+        os.environ["HTTPS_CERT_FILE"] = "config/cert.pem"
+        os.environ["HTTPS_KEY_FILE"] = "config/key.pem"
+        config._apply()
+        self.assertEqual(config.HTTPS_CERT_FILE, "config/cert.pem")
+
+
+class SslOptionsTest(unittest.TestCase):
+    """対でない証明書を渡すと uvicorn は即落ちする。Restart=always だと再起動地獄になる。"""
+
+    def _options(self, cert: str, key: str) -> dict:
+        from backend import main
+
+        with mock.patch.object(main.config, "HTTPS_CERT_FILE", cert), \
+             mock.patch.object(main.config, "HTTPS_KEY_FILE", key):
+            return main.ssl_options()
+
+    def test_unset_means_plain_http(self) -> None:
+        self.assertEqual(self._options("", ""), {})
+
+    def test_only_one_of_them_is_refused(self) -> None:
+        self.assertEqual(self._options("config/cert.pem", ""), {})
+        self.assertEqual(self._options("", "config/key.pem"), {})
+
+    def test_missing_file_falls_back_to_http(self) -> None:
+        """存在しないパスでも落ちずに HTTP で上がる。"""
+        self.assertEqual(self._options("/nope/cert.pem", "/nope/key.pem"), {})
+
+    def test_mismatched_pair_falls_back_to_http(self) -> None:
+        """CA バンドルを証明書として渡された場合など。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            cert = Path(tmp) / "cert.pem"
+            key = Path(tmp) / "key.pem"
+            cert.write_text("-----BEGIN CERTIFICATE-----\nnot-a-cert\n-----END CERTIFICATE-----\n")
+            key.write_text("-----BEGIN PRIVATE KEY-----\nnot-a-key\n-----END PRIVATE KEY-----\n")
+            self.assertEqual(self._options(str(cert), str(key)), {})
+
+    def test_matching_pair_is_passed_through(self) -> None:
+        context = mock.Mock()
+        from backend import main
+
+        with mock.patch.object(main.ssl, "SSLContext", return_value=context), \
+             mock.patch.object(main.config, "HTTPS_CERT_FILE", "config/cert.pem"), \
+             mock.patch.object(main.config, "HTTPS_KEY_FILE", "config/key.pem"):
+            options = main.ssl_options()
+
+        self.assertEqual(options,
+                         {"ssl_certfile": "config/cert.pem", "ssl_keyfile": "config/key.pem"})
+        context.load_cert_chain.assert_called_once_with("config/cert.pem", "config/key.pem")
+
+
 class ModelListingTest(unittest.TestCase):
     """使えないモデルを選ばせて後から 404 にならないようにする仕掛け。"""
 

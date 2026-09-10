@@ -61,9 +61,13 @@ python scripts/make_cert.py
 表示に従って `.env` の次の2行のコメントを外し、再起動してください。
 
 ```
-SSL_CERT_FILE=config/cert.pem
-SSL_KEY_FILE=config/key.pem
+HTTPS_CERT_FILE=config/cert.pem
+HTTPS_KEY_FILE=config/key.pem
 ```
+
+> 以前の `SSL_CERT_FILE` / `SSL_KEY_FILE` も引き続き使えます（両方そろっている場合のみ）。
+> ただし `SSL_CERT_FILE` は OpenSSL が CA バンドルの場所を指すのに使う名前でもあるため、
+> 他のソフトが設定している環境では取り違えます。新しい名前を推奨します。
 
 スマートフォンで最初に開いたとき「この接続ではプライバシーが保護されません」と出ますが、
 家庭内 LAN で自分の Raspberry Pi に繋いでいるだけなので、「詳細設定」→「アクセスする」で進めます。

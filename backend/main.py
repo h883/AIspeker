@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import ssl
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -119,6 +120,36 @@ else:  # pragma: no cover - 通常は同梱されている
         return JSONResponse({"ok": False, "error": "frontend ディレクトリが見つかりません。"}, status_code=500)
 
 
+def ssl_options() -> dict:
+    """証明書と鍵が対になっていることを確かめてから uvicorn へ渡す。
+
+    対でないファイルを渡すと uvicorn は KEY_VALUES_MISMATCH で即座に落ちる。
+    systemd の Restart=always の下ではそれが再起動の繰り返しになり、
+    画面にすら辿り着けなくなる。ここで判断し、駄目なら理由を示して
+    HTTP で起動する（音声入力は使えないが、設定画面は開ける）。
+    """
+    cert, key = config.HTTPS_CERT_FILE, config.HTTPS_KEY_FILE
+    if not cert and not key:
+        return {}
+    if not (cert and key):
+        logger.error("HTTPS には証明書と秘密鍵の両方が要ります。HTTP で起動します。")
+        return {}
+
+    try:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert, key)
+    except (OSError, ssl.SSLError) as exc:
+        logger.error("HTTPS を使えません: %s", exc)
+        logger.error("  証明書: %s", cert)
+        logger.error("  秘密鍵: %s", key)
+        logger.error("  対になっていない場合は python scripts/make_cert.py で作り直せます。")
+        logger.error("  HTTP で起動します（スマートフォンの音声入力は使えません）。")
+        return {}
+
+    logger.info("HTTPS で起動します（スマートフォンの音声入力に必要）")
+    return {"ssl_certfile": cert, "ssl_keyfile": key}
+
+
 def run() -> None:
     """python -m backend.main / スクリプトからの起動用。"""
     import uvicorn
@@ -129,10 +160,7 @@ def run() -> None:
         "reload": config.RELOAD,
         "log_level": "info",
     }
-    if config.SSL_CERT_FILE and config.SSL_KEY_FILE:
-        options["ssl_certfile"] = config.SSL_CERT_FILE
-        options["ssl_keyfile"] = config.SSL_KEY_FILE
-        logger.info("HTTPS で起動します（スマートフォンの音声入力に必要）")
+    options.update(ssl_options())
 
     uvicorn.run("backend.main:app", **options)
 
