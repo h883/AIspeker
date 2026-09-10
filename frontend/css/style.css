@@ -162,6 +162,10 @@ html, body {
   align-items: flex-start;
   gap: 10px;
 }
+/* 文言の長い行があっても、右端の時刻と削除ボタンを潰さない */
+.item > div { min-width: 0; }
+.item > button.tiny { flex-shrink: 0; white-space: nowrap; align-self: center; }
+
 .item-title { font-size: 15px; font-weight: 600; margin: 0 0 3px; }
 .item-sub { font-size: 13px; color: var(--muted); margin: 0; }
 .item-time { font-variant-numeric: tabular-nums; color: var(--accent); font-size: 14px; white-space: nowrap; }

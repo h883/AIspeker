@@ -413,7 +413,7 @@
     <form id="memory-form" class="stack-form">
       <h2>覚えさせる</h2>
       <div class="row">
-        <input id="memory-key" type="text" placeholder="項目名（例: 情報処理の担当）" required>
+        <input id="memory-key" type="text" placeholder="項目名（例: 担当の先生）" required>
         <select id="memory-category" aria-label="分類">
           <option value="general">その他</option>
           <option value="teacher">教員</option>
@@ -425,7 +425,8 @@
         </select>
       </div>
       <input id="memory-value" type="text" placeholder="内容（例: 山田先生）" required>
-      <input id="memory-expires" type="date" aria-label="覚えておく期限（任意）">
+      <label class="field-label" for="memory-expires">覚えておく期限（任意・提出物などに）</label>
+      <input id="memory-expires" type="date">
       <button type="submit">覚えさせる</button>
     </form>
 
