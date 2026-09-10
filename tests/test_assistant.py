@@ -581,6 +581,76 @@ class CalendarMergeTest(unittest.TestCase):
         self.assertEqual(starts, sorted(starts))
         self.assertEqual(events[0]["title"], "朝の用事")
 
+    def test_google_events_are_merged_and_ordered(self) -> None:
+        """Google 接続時も時間割と混ぜて時刻順に並ぶ。"""
+        today = time_tool.now()
+        timetable_tool.set_timetable(weekday=today.weekday(), period=1, subject="情報処理")
+        date_str = today.strftime("%Y-%m-%d")
+        google = [{"id": "g1", "title": "朝の用事",
+                   "start": f"{date_str}T07:30:00+09:00", "end": "", "location": "",
+                   "all_day": False, "source": "google"}]
+
+        user_settings.save({"calendar_source": "google"})
+        try:
+            with mock.patch.object(calendar_tool, "_google_events", return_value=google):
+                result = calendar_tool.get_calendar(date=date_str, days=1)
+        finally:
+            user_settings.save({"calendar_source": "local"})
+
+        self.assertEqual(result["source"], "google+timetable")
+        self.assertEqual([event["title"] for event in result["events"]],
+                         ["朝の用事", "1限 情報処理"])
+
+    def test_other_timezone_events_are_placed_correctly(self) -> None:
+        """カレンダーのタイムゾーンが JST 以外でも並び順が狂わない。
+
+        文字列比較のままだと 00:30Z（= JST 09:30）が 09:00 の授業より前に来る。
+        """
+        today = time_tool.now()
+        timetable_tool.set_timetable(weekday=today.weekday(), period=1, subject="情報処理")
+        date_str = today.strftime("%Y-%m-%d")
+        google = [{"id": "g1", "title": "UTCで返る予定",
+                   "start": f"{date_str}T00:30:00+00:00", "end": "", "location": "",
+                   "all_day": False, "source": "google"}]
+
+        user_settings.save({"calendar_source": "google"})
+        try:
+            with mock.patch.object(calendar_tool, "_google_events", return_value=google):
+                result = calendar_tool.get_calendar(date=date_str, days=1)
+        finally:
+            user_settings.save({"calendar_source": "local"})
+
+        # JST 09:30 なので、09:00 の授業より後ろに来る
+        self.assertEqual([event["title"] for event in result["events"]],
+                         ["1限 情報処理", "UTCで返る予定"])
+
+    def test_all_day_events_come_first(self) -> None:
+        today = time_tool.now()
+        timetable_tool.set_timetable(weekday=today.weekday(), period=1, subject="情報処理")
+        date_str = today.strftime("%Y-%m-%d")
+        google = [{"id": "g1", "title": "文化祭", "start": date_str, "end": "",
+                   "location": "", "all_day": True, "source": "google"}]
+
+        user_settings.save({"calendar_source": "google"})
+        try:
+            with mock.patch.object(calendar_tool, "_google_events", return_value=google):
+                result = calendar_tool.get_calendar(date=date_str, days=1)
+        finally:
+            user_settings.save({"calendar_source": "local"})
+
+        self.assertEqual(result["events"][0]["title"], "文化祭")
+
+    def test_google_failure_falls_back_and_says_so(self) -> None:
+        """Google に繋がらないときは黙って諦めず、ローカルを見たことを示す。"""
+        user_settings.save({"calendar_source": "google"})
+        try:
+            with mock.patch.object(calendar_tool, "_google_events", return_value=None):
+                result = calendar_tool.get_calendar(days=1)
+        finally:
+            user_settings.save({"calendar_source": "local"})
+        self.assertTrue(result["ok"])
+        self.assertIn("local(fallback)", result["source"])
+
     def test_can_be_switched_off(self) -> None:
         today = time_tool.now()
         timetable_tool.set_timetable(weekday=today.weekday(), period=1, subject="情報処理")

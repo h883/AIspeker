@@ -198,6 +198,25 @@ def _timetable_events(date_str: str, days: int) -> list[dict[str, Any]]:
     return events
 
 
+def _sort_key(event: dict[str, Any]) -> datetime:
+    """予定を時刻順に並べるための比較値。
+
+    ローカル予定と時間割はオフセットなし、Google はカレンダーの
+    タイムゾーン付きで返る。文字列のまま比べると、JST 以外のカレンダーの
+    予定が誤った位置に入るため、datetime に揃えてから比べる。
+    """
+    raw = str(event.get("start") or "")
+    if len(raw) == 10:
+        # 終日予定。その日の始まりとして扱い、時刻付きより前に置く
+        raw += "T00:00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        # 解釈できないものは末尾へ回す（落とさずに見せる）
+        return datetime.max.replace(tzinfo=tz())
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=tz())
+
+
 def get_calendar(date: str | None = None, days: int = 1) -> dict[str, Any]:
     target_date = resolve_date(date)
     days = max(1, min(int(days or 1), 14))
@@ -221,7 +240,7 @@ def get_calendar(date: str | None = None, days: int = 1) -> dict[str, Any]:
     # 「明日の最初の予定」から出発時刻を逆算できる（prompts.py の手順がそのまま動く）。
     lessons = _timetable_events(target_date, days)
     if lessons:
-        events = sorted(events + lessons, key=lambda event: event.get("start", ""))
+        events = sorted(events + lessons, key=_sort_key)
         used = f"{used}+timetable"
 
     return {
