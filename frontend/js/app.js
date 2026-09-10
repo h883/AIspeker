@@ -615,7 +615,7 @@
         : "Google カレンダー（未連携）";
       $("#calendar-source-note").textContent = status.google_calendar
         ? ""
-        : "Google カレンダーを使うには、Raspberry Pi で python scripts/google_auth.py を実行して認証してください。";
+        : "Google カレンダーを使うには、下の「セットアップをやり直す」から連携してください。";
     }
 
     loadMemory();
@@ -669,8 +669,10 @@
           ? "登録済み（変更するときだけ入力）" : "AIza... から始まる文字列";
         $("#setup-maps-key").placeholder = data.maps_configured
           ? "登録済み（変更するときだけ入力）" : "未設定のままでもOK";
-        $("#setup-calendar-state").textContent = data.google_calendar_connected
-          ? "現在: 連携済み" : "現在: 未連携";
+        this.renderGoogle({
+          connected: data.google_calendar_connected,
+          client_secret_saved: data.google_client_secret_saved
+        });
         this.fillFromSettings();
 
         // 登録済みのキーがあるなら、その場で使えるモデルを出しておく
@@ -833,7 +835,105 @@
       }
     },
 
+    /* --- Google カレンダー連携（この画面だけで完了させる） --- */
+
+    showGoogle: function (message, isError) {
+      const box = $("#google-result");
+      box.textContent = message;
+      box.classList.toggle("is-error", Boolean(isError));
+      box.hidden = !message;
+    },
+
+    /** 連携済みかどうかで表示を切り替える。 */
+    renderGoogle: function (data) {
+      const connected = Boolean(data && data.connected);
+      $("#google-connected-block").hidden = !connected;
+      $("#google-setup-block").hidden = connected;
+      $("#setup-calendar-state").textContent = connected ? "現在: 連携済み" : "現在: 未連携";
+      if (!connected) {
+        $("#google-secret-state").textContent = data && data.client_secret_saved
+          ? "クライアントの JSON は登録済みです。"
+          : "まだ登録されていません。";
+      }
+    },
+
+    refreshGoogle: async function () {
+      try {
+        this.renderGoogle(await API.googleState());
+      } catch (err) {
+        /* 状態が取れなくても他の入力は続けられる */
+      }
+    },
+
+    uploadGoogleSecret: async function (file) {
+      if (!file) return;
+      this.showGoogle("読み込んでいます…", false);
+      try {
+        const data = await API.googleUpload(file);
+        if (!data.ok) { this.showGoogle(data.error, true); return; }
+        this.renderGoogle(data);
+        this.showGoogle("クライアントの JSON を登録しました。「認証をはじめる」を押してください。", false);
+      } catch (err) {
+        this.showGoogle(err.message, true);
+      }
+    },
+
+    startGoogle: async function () {
+      const button = $("#google-start");
+      button.disabled = true;
+      try {
+        const data = await API.googleStart();
+        if (!data.ok) { this.showGoogle(data.error, true); return; }
+        $("#google-auth-link").href = data.auth_url;
+        $("#google-step2").hidden = false;
+        this.showGoogle("", false);
+      } catch (err) {
+        this.showGoogle(err.message, true);
+      } finally {
+        button.disabled = false;
+      }
+    },
+
+    finishGoogle: async function () {
+      const value = $("#google-redirected").value.trim();
+      if (!value) { this.showGoogle("許可のあとに表示された URL を貼り付けてください。", true); return; }
+
+      const button = $("#google-finish");
+      button.disabled = true;
+      try {
+        const data = await API.googleFinish(value);
+        if (!data.ok) { this.showGoogle(data.error, true); return; }
+        $("#google-redirected").value = "";
+        $("#google-step2").hidden = true;
+        this.renderGoogle(data);
+        this.showGoogle(data.message, false);
+        state.settings.calendar_source = "google";
+      } catch (err) {
+        this.showGoogle(err.message, true);
+      } finally {
+        button.disabled = false;
+      }
+    },
+
+    disconnectGoogle: async function () {
+      if (!window.confirm("Google カレンダーとの連携を解除します。よろしいですか？")) return;
+      try {
+        const data = await API.googleDisconnect();
+        this.renderGoogle(data);
+        this.showGoogle(data.message, false);
+        state.settings.calendar_source = "local";
+      } catch (err) {
+        this.showGoogle(err.message, true);
+      }
+    },
+
     bind: function () {
+      $("#google-secret-file").onchange = (event) =>
+        this.uploadGoogleSecret(event.target.files && event.target.files[0]);
+      $("#google-start").onclick = () => this.startGoogle();
+      $("#google-finish").onclick = () => this.finishGoogle();
+      $("#google-disconnect").onclick = () => this.disconnectGoogle();
+
       $("#setup-show-key").onchange = (event) => {
         $("#setup-gemini-key").type = event.target.checked ? "text" : "password";
       };
@@ -1037,8 +1137,10 @@
       const data = await API.setupState();
       state.settings = data.settings;
       needsSetup = data.needs_setup;
-      $("#setup-calendar-state").textContent = data.google_calendar_connected
-        ? "現在: 連携済み" : "現在: 未連携";
+      setup.renderGoogle({
+        connected: data.google_calendar_connected,
+        client_secret_saved: data.google_client_secret_saved
+      });
     } catch (err) {
       showToast(err.message);
     }

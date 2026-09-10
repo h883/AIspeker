@@ -159,10 +159,48 @@
 
       <h2>Google カレンダー（任意）</h2>
       <p class="note">
-        パソコンで <code>python scripts/google_auth.py</code> を実行すると連携できます。
-        未連携のあいだは、アプリ内の予定表を使います。
+        学校や個人の Google カレンダーの予定を取り込めます。
+        この画面だけで設定でき、ターミナルは要りません。
+        未連携のあいだは、アプリ内の予定表と時間割を使います。
       </p>
       <p id="setup-calendar-state" class="note"></p>
+
+      <div id="google-connected-block" class="stack-form" hidden>
+        <p class="note">連携済みです。予定は Google カレンダーから取得しています。</p>
+        <button id="google-disconnect" class="ghost" type="button">連携を解除する</button>
+      </div>
+
+      <div id="google-setup-block">
+        <ol class="setup-howto">
+          <li>Google Cloud Console で <b>Calendar API</b> を有効にする</li>
+          <li>OAuth クライアント ID を作る（種類は必ず <b>デスクトップアプリ</b>）</li>
+          <li>ダウンロードした JSON を下で選ぶ</li>
+        </ol>
+
+        <label class="field-label" for="google-secret-file">クライアントの JSON</label>
+        <input id="google-secret-file" type="file" accept="application/json,.json">
+        <p id="google-secret-state" class="note"></p>
+
+        <button id="google-start" class="secondary" type="button">認証をはじめる</button>
+
+        <div id="google-step2" class="stack-form" hidden>
+          <p class="note">
+            下のリンクを開いて許可してください。許可すると
+            <code>127.0.0.1</code> のページへ移動し、
+            <b>「このサイトにアクセスできません」と表示されますが、それで正常です。</b>
+            そのまま<b>アドレス欄の URL をすべてコピー</b>して、下に貼り付けてください。
+          </p>
+          <a id="google-auth-link" class="google-auth-link" href="#" target="_blank" rel="noopener">
+            Google の許可画面を開く
+          </a>
+          <label class="field-label" for="google-redirected">許可のあとに表示された URL</label>
+          <input id="google-redirected" type="text" spellcheck="false"
+                 placeholder="http://127.0.0.1:8765/?code=... を貼り付け">
+          <button id="google-finish" type="button">連携する</button>
+        </div>
+
+        <p id="google-result" class="setup-result" hidden></p>
+      </div>
 
       <div class="setup-actions">
         <button class="ghost" id="setup-back-3" type="button">戻る</button>

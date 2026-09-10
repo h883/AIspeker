@@ -212,6 +212,10 @@ html, body {
   min-width: 48px;
 }
 
+/* display を指定したクラスと hidden 属性が併用されると、
+   クラス側の display が勝って隠れなくなる。属性を常に優先させる。 */
+[hidden] { display: none !important; }
+
 /* ---------- 見出し付きのまとまり（時間割・記憶）---------- */
 .block { margin-bottom: 20px; }
 .block h2 { font-size: 15px; margin: 12px 0 4px; color: var(--muted); font-weight: 500; }
@@ -249,6 +253,19 @@ button {
 }
 button.ghost { background: transparent; border: 1px solid var(--line); color: var(--muted); padding: 8px 12px; font-size: 13px; }
 button.tiny { background: transparent; border: 1px solid var(--line); color: var(--muted); padding: 6px 10px; font-size: 12px; }
+
+/* Google の許可画面へ渡すリンク。押すものだと分かるようにボタンと同じ形にする */
+.google-auth-link {
+  display: block;
+  text-align: center;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 12px;
+  padding: 12px 16px;
+  font-size: 15px;
+  text-decoration: none;
+  margin: 10px 0;
+}
 
 .switch { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--text); }
 .switch input { width: auto; }

@@ -9,6 +9,7 @@ APIキーの値は Raspberry Pi 側の .env にのみ保存し、
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
@@ -45,6 +46,7 @@ def _state() -> dict:
         "gemini_model": config.GEMINI_MODEL,
         "maps_configured": bool(config.GOOGLE_MAPS_API_KEY),
         "google_calendar_connected": calendar_tool.google_connected(),
+        "google_client_secret_saved": Path(config.GOOGLE_OAUTH_CLIENT_SECRET_FILE).exists(),
         "env_path": str(config.ENV_PATH),
         "settings": settings,
     }

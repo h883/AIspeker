@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from backend import config
 from backend.ai import gemini
-from backend.api import chat, dashboard, settings, setup, voice
+from backend.api import chat, dashboard, google, settings, setup, voice
 from backend.database import db
 
 logging.basicConfig(
@@ -47,6 +47,7 @@ app.include_router(voice.router)
 app.include_router(settings.router)
 app.include_router(dashboard.router)
 app.include_router(setup.router)
+app.include_router(google.router)
 
 
 @app.get("/api/health")

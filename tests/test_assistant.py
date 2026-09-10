@@ -6,6 +6,7 @@ Gemini や外部 API は呼ばず、ツール解釈と Tool Calling ループの
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
@@ -729,6 +730,179 @@ class CalendarSourceGuardTest(unittest.TestCase):
         result = self._apply({"calendar_source": "local"}, connected=False)
         self.assertEqual(result["settings"]["calendar_source"], "local")
         self.assertEqual(result["warning"], "")
+
+
+class GoogleOAuthTest(unittest.TestCase):
+    """画面だけで OAuth を完了させる経路。Google へは接続せずに検証する。"""
+
+    def setUp(self) -> None:
+        from backend.api import google as google_api
+
+        self.api = google_api
+        self.secret = Path(config.GOOGLE_OAUTH_CLIENT_SECRET_FILE)
+        self.token = Path(config.GOOGLE_OAUTH_TOKEN_FILE)
+        self.secret.parent.mkdir(parents=True, exist_ok=True)
+        self.secret.unlink(missing_ok=True)
+        self.token.unlink(missing_ok=True)
+        google_api._pending.clear()
+        user_settings.save({"calendar_source": "local"})
+
+    def tearDown(self) -> None:
+        self.secret.unlink(missing_ok=True)
+        self.token.unlink(missing_ok=True)
+        self.api._pending.clear()
+        user_settings.save({"calendar_source": "local"})
+
+    # --- 貼り付けられた内容の解釈 ---
+
+    def test_extracts_code_from_pasted_url(self) -> None:
+        code, state, error = self.api.extract_code(
+            "http://127.0.0.1:8765/?state=abc&code=4/0Axyz&scope=https://www.googleapis.com/auth/calendar.readonly"
+        )
+        self.assertEqual(code, "4/0Axyz")
+        self.assertEqual(state, "abc")
+        self.assertEqual(error, "")
+
+    def test_accepts_a_bare_code(self) -> None:
+        code, state, _ = self.api.extract_code("4/0Axyz")
+        self.assertEqual(code, "4/0Axyz")
+        self.assertEqual(state, "")
+
+    def test_detects_denied_consent(self) -> None:
+        _code, _state, error = self.api.extract_code(
+            "http://127.0.0.1:8765/?error=access_denied&state=abc"
+        )
+        self.assertEqual(error, "access_denied")
+
+    def test_denied_consent_is_reported(self) -> None:
+        result = self.api.finish(self.api.Redirected(
+            redirected_url="http://127.0.0.1:8765/?error=access_denied&state=abc"))
+        self.assertFalse(result["ok"])
+        self.assertIn("許可されませんでした", result["error"])
+
+    # --- クライアント JSON の受け取り ---
+
+    def _upload(self, payload: bytes, filename: str = "client_secret.json") -> dict:
+        import asyncio
+
+        upload = mock.Mock()
+        upload.read = mock.AsyncMock(return_value=payload)
+        upload.filename = filename
+        return asyncio.run(self.api.upload_client_secret(upload))
+
+    def test_desktop_client_is_saved(self) -> None:
+        payload = json.dumps({"installed": {"client_id": "x.apps.googleusercontent.com",
+                                            "client_secret": "s",
+                                            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                                            "token_uri": "https://oauth2.googleapis.com/token"}})
+        result = self._upload(payload.encode("utf-8"))
+        self.assertTrue(result["ok"])
+        self.assertTrue(self.secret.exists())
+        self.assertTrue(result["client_secret_saved"])
+
+    def test_web_client_is_rejected_with_the_reason(self) -> None:
+        """ウェブアプリ型はループバックへ返せないので、ここで気づけるようにする。"""
+        payload = json.dumps({"web": {"client_id": "x", "client_secret": "s"}})
+        result = self._upload(payload.encode("utf-8"))
+        self.assertFalse(result["ok"])
+        self.assertIn("デスクトップアプリ", result["error"])
+
+    def test_broken_json_is_rejected(self) -> None:
+        result = self._upload(b"{ not json")
+        self.assertFalse(result["ok"])
+        self.assertIn("JSON", result["error"])
+
+    def test_empty_file_is_rejected(self) -> None:
+        self.assertFalse(self._upload(b"")["ok"])
+
+    # --- 認証の開始と完了 ---
+
+    def test_start_requires_the_client_secret(self) -> None:
+        result = self.api.start()
+        self.assertFalse(result["ok"])
+        self.assertIn("JSON", result["error"])
+
+    def _fake_flow(self, refresh_token: str = "refresh-me"):
+        creds = mock.Mock()
+        creds.refresh_token = refresh_token
+        creds.to_json.return_value = json.dumps({"token": "t", "refresh_token": refresh_token})
+        flow = mock.Mock()
+        flow.authorization_url.return_value = ("https://accounts.google.com/o/oauth2/auth?x=1", "state-1")
+        flow.credentials = creds
+        return flow
+
+    def test_start_then_finish_saves_the_token(self) -> None:
+        self.secret.write_text("{}", encoding="utf-8")
+        flow = self._fake_flow()
+
+        with mock.patch("google_auth_oauthlib.flow.Flow.from_client_secrets_file", return_value=flow):
+            started = self.api.start()
+        self.assertTrue(started["ok"])
+        self.assertEqual(started["state"], "state-1")
+        # 更新用トークンが返るよう offline+consent で要求している
+        kwargs = flow.authorization_url.call_args.kwargs
+        self.assertEqual(kwargs["access_type"], "offline")
+        self.assertEqual(kwargs["prompt"], "consent")
+
+        result = self.api.finish(self.api.Redirected(
+            redirected_url="http://127.0.0.1:8765/?state=state-1&code=4/0Axyz"))
+
+        self.assertTrue(result["ok"])
+        flow.fetch_token.assert_called_once_with(code="4/0Axyz")
+        self.assertTrue(self.token.exists())
+        self.assertIn("refresh_token", self.token.read_text(encoding="utf-8"))
+        # 連携できたら取得元も切り替える
+        self.assertEqual(user_settings.get("calendar_source"), "google")
+
+    def test_missing_refresh_token_is_refused(self) -> None:
+        """更新用トークンが無いと1時間で切れる。連携済みに見せない。"""
+        self.secret.write_text("{}", encoding="utf-8")
+        flow = self._fake_flow(refresh_token="")
+        with mock.patch("google_auth_oauthlib.flow.Flow.from_client_secrets_file", return_value=flow):
+            self.api.start()
+        result = self.api.finish(self.api.Redirected(
+            redirected_url="http://127.0.0.1:8765/?state=state-1&code=4/0Axyz"))
+
+        self.assertFalse(result["ok"])
+        self.assertIn("更新用", result["error"])
+        self.assertFalse(self.token.exists())
+        self.assertEqual(user_settings.get("calendar_source"), "local")
+
+    def test_finish_without_start_is_reported(self) -> None:
+        result = self.api.finish(self.api.Redirected(
+            redirected_url="http://127.0.0.1:8765/?state=unknown&code=4/0Axyz"))
+        self.assertFalse(result["ok"])
+        self.assertIn("やり直して", result["error"])
+
+    def test_url_without_a_code_is_reported(self) -> None:
+        result = self.api.finish(self.api.Redirected(redirected_url="http://127.0.0.1:8765/?foo=1"))
+        self.assertFalse(result["ok"])
+        self.assertIn("認証コード", result["error"])
+
+    def test_token_exchange_failure_keeps_things_unlinked(self) -> None:
+        self.secret.write_text("{}", encoding="utf-8")
+        flow = self._fake_flow()
+        flow.fetch_token.side_effect = ValueError("bad code")
+        with mock.patch("google_auth_oauthlib.flow.Flow.from_client_secrets_file", return_value=flow):
+            self.api.start()
+        result = self.api.finish(self.api.Redirected(
+            redirected_url="http://127.0.0.1:8765/?state=state-1&code=wrong"))
+
+        self.assertFalse(result["ok"])
+        self.assertFalse(self.token.exists())
+        self.assertEqual(user_settings.get("calendar_source"), "local")
+
+    def test_disconnect_removes_the_token(self) -> None:
+        self.token.write_text("{}", encoding="utf-8")
+        user_settings.save({"calendar_source": "google"})
+        result = self.api.disconnect()
+        self.assertTrue(result["ok"])
+        self.assertFalse(self.token.exists())
+        self.assertEqual(user_settings.get("calendar_source"), "local")
+
+    def test_redirect_uri_is_loopback(self) -> None:
+        """デスクトップアプリ型が許すのはループバックのみ。"""
+        self.assertTrue(self.api.REDIRECT_URI.startswith("http://127.0.0.1"))
 
 
 class ChatMemoryWiringTest(unittest.TestCase):
