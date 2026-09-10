@@ -45,28 +45,37 @@ def parse_weekday(value: Any) -> int | None:
     return _WEEKDAY_ALIASES.get(text)
 
 
-def _period_times(period: int) -> tuple[str, str]:
-    """時限から開始・終了時刻を計算する。
+def schedule_params() -> tuple[datetime, int, int]:
+    """時限の時刻計算に使う設定を、まとめて一度だけ読む。
 
-    個別に start_time が登録されていない授業のための既定値。
-    授業開始時刻・1コマの長さ・休み時間はユーザー設定から取る。
+    1コマごとに user_settings.load() を呼ぶと、settings.json の読み込みと
+    JSON 解析が予定の件数だけ繰り返される。呼び出し側で一度求めて配る。
     """
     settings = user_settings.load()
     try:
         base = datetime.strptime(str(settings.get("school_start_time") or "09:00"), "%H:%M")
     except ValueError:
         base = datetime.strptime("09:00", "%H:%M")
-    length = int(settings.get("period_minutes") or 50)
-    rest = int(settings.get("break_minutes") or 10)
+    return base, int(settings.get("period_minutes") or 50), int(settings.get("break_minutes") or 10)
 
+
+def _period_times(period: int, params: tuple[datetime, int, int] | None = None) -> tuple[str, str]:
+    """時限から開始・終了時刻を計算する。
+
+    個別に start_time が登録されていない授業のための既定値。
+    params を渡せば設定の読み直しをしない。
+    """
+    base, length, rest = params or schedule_params()
     start = base + timedelta(minutes=(period - 1) * (length + rest))
     end = start + timedelta(minutes=length)
     return start.strftime("%H:%M"), end.strftime("%H:%M")
 
 
-def _public(row: dict[str, Any]) -> dict[str, Any]:
-    start = row["start_time"] or _period_times(row["period"])[0]
-    end = row["end_time"] or _period_times(row["period"])[1]
+def _public(row: dict[str, Any], params: tuple[datetime, int, int] | None = None) -> dict[str, Any]:
+    params = params or schedule_params()
+    default_start, default_end = _period_times(row["period"], params)
+    start = row["start_time"] or default_start
+    end = row["end_time"] or default_end
     return {
         "id": row["id"],
         "weekday": row["weekday"],
@@ -141,7 +150,8 @@ def get_timetable(weekday: Any = None, date: str | None = None) -> dict[str, Any
             "SELECT * FROM timetable WHERE weekday = ? ORDER BY period", (day,)
         )
 
-    lessons = [_public(row) for row in rows]
+    params = schedule_params()
+    lessons = [_public(row, params) for row in rows]
     return {
         "ok": True,
         "weekday": day,
@@ -168,23 +178,43 @@ def clear_timetable(weekday: Any = None, period: Any = None) -> dict[str, Any]:
 
 # --- カレンダーへの合成 ---
 
-def events_for_date(date_str: str) -> list[dict[str, Any]]:
-    """その日の時間割を、予定と同じ形にして返す。
+def events_for_range(date_str: str, days: int = 1) -> list[dict[str, Any]]:
+    """期間内の各日の時間割を、予定と同じ形にして返す。
+
+    時間割は多くても数十行なので、日ごとに問い合わせず一度だけ読んで
+    曜日で振り分ける。設定も一度だけ読む。
 
     source を timetable にしておき、確定した予定ではなく
     「登録した時間割から出したもの」だと分かるようにする。
     """
     try:
-        day = datetime.fromisoformat(date_str).date()
+        first = datetime.fromisoformat(date_str).date()
     except ValueError:
         return []
 
-    rows = db.query(
-        "SELECT * FROM timetable WHERE weekday = ? ORDER BY period", (day.weekday(),)
-    )
+    by_weekday: dict[int, list[dict[str, Any]]] = {}
+    for row in db.query("SELECT * FROM timetable ORDER BY weekday, period"):
+        by_weekday.setdefault(row["weekday"], []).append(row)
+    if not by_weekday:
+        return []
+
+    params = schedule_params()
+    events: list[dict[str, Any]] = []
+    for offset in range(max(1, days)):
+        day = first + timedelta(days=offset)
+        events.extend(_events_for_day(day, by_weekday.get(day.weekday(), []), params))
+    return events
+
+
+def events_for_date(date_str: str) -> list[dict[str, Any]]:
+    """その日ぶんだけ欲しいときの入口。"""
+    return events_for_range(date_str, 1)
+
+
+def _events_for_day(day, rows, params) -> list[dict[str, Any]]:
     events = []
     for row in rows:
-        lesson = _public(row)
+        lesson = _public(row, params)
         start = datetime.combine(
             day, datetime.strptime(lesson["start_time"], "%H:%M").time(), tzinfo=tz()
         )
@@ -210,11 +240,12 @@ def events_for_date(date_str: str) -> list[dict[str, Any]]:
 
 def list_timetable() -> dict[str, Any]:
     rows = db.query("SELECT * FROM timetable ORDER BY weekday, period")
+    params = schedule_params()
     return {
         "ok": True,
         "weekdays": WEEKDAYS_JA,
         "count": len(rows),
-        "lessons": [_public(row) for row in rows],
+        "lessons": [_public(row, params) for row in rows],
     }
 
 

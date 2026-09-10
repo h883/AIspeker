@@ -188,14 +188,7 @@ def _timetable_events(date_str: str, days: int) -> list[dict[str, Any]]:
     """期間内の各日について、登録済みの時間割を予定の形で返す。"""
     if not user_settings.get("timetable_enabled", True):
         return []
-    try:
-        start = datetime.fromisoformat(date_str).date()
-    except ValueError:
-        return []
-    events: list[dict[str, Any]] = []
-    for offset in range(days):
-        events.extend(timetable_tool.events_for_date((start + timedelta(days=offset)).isoformat()))
-    return events
+    return timetable_tool.events_for_range(date_str, days)
 
 
 def _sort_key(event: dict[str, Any]) -> datetime:
